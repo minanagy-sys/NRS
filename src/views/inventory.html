@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Inventory · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · INVENTORY PERFORMANCE · ODOO 18</div>
+  <h1>Inventory Performance<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">Read cover, not quantity. How long the stock lasts at the current rate of use, what is about to expire, and whether any of it is selling.</div>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">On hand</div><div class="val" id="hHand">—</div><div class="unit" id="hHandUnit">vials · syringes · pens</div></div>
+    <div class="hero-stat"><div class="lbl">Stock value</div><div class="val" id="hVal">—</div><div class="unit" id="hValUnit">EGP, at purchase cost</div></div>
+    <div class="hero-stat"><div class="lbl">Short</div><div class="val" id="hShort">—</div><div class="unit">stock-out, critical or below ideal</div></div>
+    <div class="hero-stat"><div class="lbl">At risk</div><div class="val" id="hRisk">—</div><div class="unit">EGP expiring within 180 days</div></div>
+  </div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="ov"><span class="tab-num">01</span> Overview</button>
+  <button class="tab" data-panel="ex"><span class="tab-num">02</span> Expiry</button>
+  <button class="tab" data-panel="cv"><span class="tab-num">03</span> Movement ledger</button>
+  <button class="tab" data-panel="ar"><span class="tab-num">04</span> At-risk sales</button></div></div>
+
+<div class="panel active" id="ov"></div>
+<div class="panel" id="ex"></div>
+<div class="panel" id="cv"></div>
+<div class="panel" id="ar"></div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/inventory.js"></script>
+</body>
+</html>

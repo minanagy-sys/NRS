@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Targets &amp; Doctor Commission · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
+  <!-- Moved into the shared bar by cbar.js. Lives here because it
+       belongs to this report and would be noise on the other ten. -->
+  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
+      <button data-scope="all" class="on">All</button>
+      <button data-scope="Nouvel Age">Nouvel Age</button>
+      <button data-scope="ZAT">ZAT</button>
+    </div></div>
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · COMMISSION · ODOO 18</div>
+  <h1>Target tracker<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">Net cash collected ex-VAT against monthly target, scored on the commission policy in force.</div>
+  <div class="hero-stats"><div class="hero-stat"><div class="lbl">Commission base</div><div class="val" id="hNet">—</div><div class="unit">EGP ex-VAT</div></div>
+    <div class="hero-stat"><div class="lbl">Pace</div><div class="val" id="hPace">—</div><div class="unit">vs pro-rata target</div></div>
+    <div class="hero-stat"><div class="lbl">Branches at the floor</div><div class="val" id="hQual">—</div><div class="unit" id="hQualU">on actual achievement</div></div>
+    <div class="hero-stat"><div class="lbl">Payable now</div><div class="val" id="hPool">—</div><div class="unit" id="hPoolU">EGP</div></div></div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs">
+  <button class="tab active" data-panel="tva"><span class="tab-num">01</span> Target vs achieved</button>
+  <button class="tab" data-panel="doc"><span class="tab-num">02</span> Doctor targets</button>
+  <button class="tab" data-panel="br"><span class="tab-num">03</span> Branch targets</button>
+  <button class="tab" data-panel="com"><span class="tab-num">04</span> Doctor commission</button>
+  <button class="tab" data-panel="gates"><span class="tab-num">05</span> Management gates</button>
+</div></div>
+
+<div class="panel active" id="tva"></div>
+<div class="panel" id="doc"></div>
+<div class="panel" id="br"></div>
+<div class="panel" id="com"></div>
+<div class="panel" id="gates"></div>
+
+<!-- The payslip modal. Same markup the NRS import dialog uses, so it inherits
+     the shell, the backdrop click and the Escape key without a second copy. -->
+<div class="sheet-dialog" id="dlg" hidden>
+  <div class="sheet-card payslip-card" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle"></h3>
+    <div id="dlgBody"></div>
+    <div class="sheet-actions" id="dlgActions"></div>
+  </div>
+</div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/target-view.js"></script>
+<script src="/assets/targets.js"></script>
+</body>
+</html>

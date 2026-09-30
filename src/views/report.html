@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Sales · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="today,yesterday,7d,mtd,lastmonth" data-preset="mtd" data-sync-stock="1">
+  <!-- Moved into the shared bar by cbar.js. Lives here because it
+       belongs to this report and would be noise on the other ten. -->
+  <div class="cbar-extra"><button class="btn ghost" id="export" title="Download next month's target sheet to fill in">Export</button>
+      <button class="btn ghost" id="import" title="Publish a filled-in target sheet">Import</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" hidden></div>
+</div>
+
+<header class="header">
+  <div class="brand">Nouvelage · Daily Sales · Odoo 18</div>
+  <h1>NRS Performance<em id="hPeriod">—</em></h1>
+  <p class="header-sub" id="hSub">Live from the Nouvelage Odoo MCP · per-product, per-doctor, per-branch, per-target · ex-VAT and inc-VAT</p>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">Ex-VAT</div><div class="val" id="hEx">—<small>EGP</small></div></div>
+    <div class="hero-stat"><div class="lbl">Inc-VAT</div><div class="val" id="hInc">—<small>EGP</small></div></div>
+    <div class="hero-stat"><div class="lbl">Lines</div><div class="val" id="hLines">—<small>invoices</small></div></div>
+    <div class="hero-stat"><div class="lbl">Coverage</div><div class="val" id="hCov">—<small>branches · doctors</small></div></div>
+  </div>
+</header>
+
+<div class="tabs-wrap"><div class="tabs">
+  <button class="tab active" data-panel="overview"><span class="tab-num">01</span> Overview</button>
+  <button class="tab" data-panel="branches"><span class="tab-num">02</span> Drill-down</button>
+  <button class="tab" data-panel="doctors"><span class="tab-num">03</span> Doctors</button>
+  <button class="tab" data-panel="targets"><span class="tab-num">04</span> Targets</button>
+  <button class="tab" data-panel="products"><span class="tab-num">05</span> Products</button>
+  <button class="tab" data-panel="stock"><span class="tab-num">06</span> Stock</button>
+  <button class="tab" data-panel="data"><span class="tab-num">07</span> Data quality</button>
+</div></div>
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="panel active" id="overview"></div>
+<div class="panel" id="branches"></div>
+<div class="panel" id="doctors"></div>
+<div class="panel" id="targets"></div>
+<div class="panel" id="products"></div>
+<div class="panel" id="stock"></div>
+<div class="panel" id="data"></div>
+
+<div class="sheet-dialog" id="dlg" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle"></h3>
+    <div id="dlgBody"></div>
+    <div class="sheet-actions" id="dlgActions"></div>
+  </div>
+</div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/target-view.js"></script>
+<script src="/assets/draft.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>

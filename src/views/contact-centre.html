@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Contact Centre · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
+  <!-- Moved into the shared bar by cbar.js. Lives here because it
+       belongs to this report and would be noise on the other ten. -->
+  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
+      <button data-scope="all" class="on">All</button>
+      <button data-scope="Nouvel Age">Nouvel Age</button>
+      <button data-scope="ZAT">ZAT</button>
+    </div></div>
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · CONTACT CENTRE · PBX &amp; ODOO 18</div>
+  <h1>Contact Centre<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">The phones for 1–18 August, the bookings for whatever range you pick — and every panel says which.</div>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">Sessions</div><div class="val" id="hSess">—</div><div class="unit">inbound + dials</div></div>
+    <div class="hero-stat"><div class="lbl">Answer rate</div><div class="val" id="hAns">—</div><div class="unit">of inbound calls</div></div>
+    <div class="hero-stat"><div class="lbl">Bookings</div><div class="val" id="hBook">—</div><div class="unit">all channels, Odoo</div></div>
+    <div class="hero-stat"><div class="lbl">Show rate</div><div class="val" id="hShow">—</div><div class="unit">policy floor is 75%</div></div>
+  </div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="ov"><span class="tab-num">01</span> Executive summary</button>
+  <button class="tab" data-panel="q"><span class="tab-num">02</span> Queues</button>
+  <button class="tab" data-panel="ag"><span class="tab-num">03</span> Agents</button>
+  <button class="tab" data-panel="out"><span class="tab-num">04</span> Outbound</button>
+  <button class="tab" data-panel="bk"><span class="tab-num">05</span> Bookings</button></div></div>
+
+<div class="panel active" id="ov"></div>
+<div class="panel" id="q"></div>
+<div class="panel" id="ag"></div>
+<div class="panel" id="out"></div>
+<div class="panel" id="bk"></div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/contact-centre.js"></script>
+</body>
+</html>

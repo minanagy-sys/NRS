@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Commercial Sales · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
+  <!-- Moved into the shared bar by cbar.js. Lives here because it
+       belongs to this report and would be noise on the other ten. -->
+  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
+      <button data-scope="all" class="on">All</button>
+      <button data-scope="Nouvel Age">Nouvel Age</button>
+      <button data-scope="ZAT">ZAT</button>
+    </div></div>
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · COMMERCIAL SALES · ODOO 18</div>
+  <h1>Commercial Sales<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">Revenue ex-package, the mix behind it, and the patients who paid for it.</div>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">Revenue ex-VAT</div><div class="val" id="hRev">—</div><div class="unit">ex-package</div></div>
+    <div class="hero-stat"><div class="lbl">Invoices</div><div class="val" id="hInv">—</div><div class="unit">ex-package</div></div>
+    <div class="hero-stat"><div class="lbl">Average ticket</div><div class="val" id="hTk">—</div><div class="unit">EGP per invoice</div></div>
+    <div class="hero-stat"><div class="lbl">Patients</div><div class="val" id="hPat">—</div><div class="unit">billed in range</div></div>
+  </div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="ov"><span class="tab-num">01</span> Overview</button>
+  <button class="tab" data-panel="br"><span class="tab-num">02</span> Branch performance</button>
+  <button class="tab" data-panel="mix"><span class="tab-num">03</span> Service mix</button>
+  <button class="tab" data-panel="pat"><span class="tab-num">04</span> Patients</button></div></div>
+
+<div class="panel active" id="ov"></div>
+<div class="panel" id="br"></div>
+<div class="panel" id="mix"></div>
+<div class="panel" id="pat"></div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/commercial-sales.js"></script>
+</body>
+</html>

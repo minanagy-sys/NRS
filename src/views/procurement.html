@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Procurement · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="ytd">
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · PROCUREMENT &amp; PRODUCTS · ODOO 18</div>
+  <h1>Procurement &amp; Products<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">Every payable, broken down by what it was for — then one product at a time, from the purchase order to the doctor who used it.</div>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">Purchases ex-VAT</div><div class="val" id="hNet">—</div><div class="unit" id="hNetUnit">every payable</div></div>
+    <div class="hero-stat"><div class="lbl">Consumables</div><div class="val" id="hCons">—</div><div class="unit">of that, stock the clinic uses</div></div>
+    <div class="hero-stat"><div class="lbl">Returned</div><div class="val" id="hRet">—</div><div class="unit" id="hRetUnit">sent back to suppliers</div></div>
+    <div class="hero-stat"><div class="lbl">Cash back due</div><div class="val" id="hCb">—</div><div class="unit" id="hCbUnit">on agreed rates</div></div>
+  </div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="ov"><span class="tab-num">01</span> Overview</button>
+  <button class="tab" data-panel="pr"><span class="tab-num">02</span> Products</button>
+  <button class="tab" data-panel="vs"><span class="tab-num">03</span> Vendors</button>
+  <button class="tab" data-panel="rt"><span class="tab-num">04</span> Returns</button>
+  <button class="tab" data-panel="pu"><span class="tab-num">05</span> Purchasing</button></div></div>
+
+<div class="panel active" id="ov"></div>
+<div class="panel" id="pr"></div>
+<div class="panel" id="vs"></div>
+<div class="panel" id="rt"></div>
+<div class="panel" id="pu"></div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/procurement.js"></script>
+</body>
+</html>

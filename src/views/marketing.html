@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Marketing · Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
+  <!-- Moved into the shared bar by cbar.js. Lives here because it
+       belongs to this report and would be noise on the other ten. -->
+  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
+      <button data-scope="all" class="on">All</button>
+      <button data-scope="Nouvel Age">Nouvel Age</button>
+      <button data-scope="ZAT">ZAT</button>
+    </div></div>
+</div>
+
+<div class="header">
+  <div class="brand">NOUVELAGE · MARKETING · META &amp; INSTAGRAM</div>
+  <h1>Marketing<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">What was spent, what came back, and how much of it can be traced.</div>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="lbl">Spend</div><div class="val" id="hSpend">—</div><div class="unit">EGP, paid Meta</div></div>
+    <div class="hero-stat"><div class="lbl">Results</div><div class="val" id="hRes">—</div><div class="unit">messages + leads</div></div>
+    <div class="hero-stat"><div class="lbl">Cost per result</div><div class="val" id="hCpr">—</div><div class="unit">EGP</div></div>
+    <div class="hero-stat"><div class="lbl">Leads to patients</div><div class="val" id="hConv">—</div><div class="unit">reached a booking</div></div>
+  </div>
+</div>
+
+<div class="rangeline" id="rangeline">Loading…</div>
+
+<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="paid"><span class="tab-num">01</span> Paid delivery</button>
+  <button class="tab" data-panel="doc"><span class="tab-num">02</span> Doctors &amp; services</button>
+  <button class="tab" data-panel="lead"><span class="tab-num">03</span> Lead quality</button>
+  <button class="tab" data-panel="soc"><span class="tab-num">04</span> Social</button>
+  <button class="tab" data-panel="exi"><span class="tab-num">05</span> What exists</button></div></div>
+
+<div class="panel active" id="paid"></div>
+<div class="panel" id="doc"></div>
+<div class="panel" id="lead"></div>
+<div class="panel" id="soc"></div>
+<div class="panel" id="exi"></div>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/cbar.js"></script>
+<script src="/assets/rules.js"></script>
+<script src="/assets/marketing.js"></script>
+</body>
+</html>
