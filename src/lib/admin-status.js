@@ -259,6 +259,119 @@ async function commission(now) {
 }
 
 /**
+ * The plan and the payslips.
+ *
+ * Three things that go quiet rather than loud, each one found the hard way:
+ *
+ *   A branch with no 2027 target reads as a branch at 0% of plan, which looks
+ *   like a failing branch rather than a missing decision.
+ *
+ *   A doctor on the plan whose name reaches no invoice and no scheme earns a
+ *   target nobody can be measured against. Names here are never paired by
+ *   similarity — "Dr.Merna Masoud" and "Dr.Merna Ashraf" are one edit apart and
+ *   are different people.
+ *
+ *   A doctor with commission and no payroll row gets no payslip. For the three
+ *   on schemes that do not count hours, nobody records attendance BY DESIGN, so
+ *   they are missing from the file every single month and the tab shows 1.4 M
+ *   of commission with no payslip behind it. The fix is a row in the payroll
+ *   sheet, which is why this says so rather than quietly paying them.
+ */
+async function planChecks(now) {
+  const items = [];
+  const year = now.getUTCFullYear();
+
+  /* ---- branches with nothing planned for next year ---- */
+  const [branches, planned] = await Promise.all([
+    prisma.commissionBranch.findMany({ where: { active: true }, select: { id: true, name: true } }),
+    prisma.commissionTarget.groupBy({ by: ['branchId'], where: { year: year + 1 }, _count: true }),
+  ]);
+  const have = new Map(planned.map((p) => [p.branchId, p._count]));
+  const bare = branches.filter((b) => !have.get(b.id));
+  if (branches.length && have.size && bare.length) {
+    items.push({
+      key: 'plan:branches',
+      severity: 'overdue',
+      title: `${bare.length} branch${bare.length === 1 ? ' has' : 'es have'} no ${year + 1} target`,
+      cost: `${have.size} of ${branches.length} branches are planned. The rest will score as 0% of plan, `
+        + 'which reads as a failing branch rather than a missing decision.',
+      detail: bare.map((b) => b.name).join(', '),
+      metric: { planned: have.size, branches: branches.length, bare: bare.length },
+      action: { tab: 'periods' },
+    });
+  }
+
+  /* ---- plan doctors who reach nothing ---- */
+  const [planDocs, billed, schemed] = await Promise.all([
+    prisma.doctorPlanMonth.findMany({ distinct: ['doctorName'], select: { doctorName: true } }),
+    prisma.invoice.groupBy({ by: ['specialistName'], where: { moveType: 'out_invoice', specialistName: { not: null } } }),
+    prisma.doctorScheme.findMany({ select: { doctorName: true } }),
+  ]);
+  const known = new Set([
+    ...billed.map((b) => String(b.specialistName).trim().toLowerCase()),
+    ...schemed.map((d) => d.doctorName.trim().toLowerCase()),
+  ]);
+  const ghosts = planDocs.map((d) => d.doctorName).filter((n) => !known.has(n.trim().toLowerCase()));
+  if (planDocs.length && ghosts.length) {
+    items.push({
+      key: 'plan:doctors',
+      severity: ghosts.length > 5 ? 'overdue' : 'soon',
+      title: `${ghosts.length} doctor${ghosts.length === 1 ? '' : 's'} on the plan match no Odoo name`,
+      cost: 'They carry a target nobody can be measured against, and they will never appear on a '
+        + 'target-vs-achieved row.',
+      detail: ghosts.slice(0, 10).join(', ') + (ghosts.length > 10 ? `, and ${ghosts.length - 10} more` : ''),
+      metric: { planned: planDocs.length, unmatched: ghosts.length },
+      action: { tab: 'mapping' },
+    });
+  }
+
+  /* ---- commission earned with no payroll row behind it ---- */
+  /* THE LATEST MONTH ACTUALLY LOADED, not the current one. Keyed to the calendar
+     month this fired on nothing at all: payroll arrives days into the following
+     month, so the current month is empty almost all of the time and the check
+     slept through every month that had a gap in it. */
+  const latestPay = await prisma.doctorPayrollMonth.findFirst({
+    orderBy: { period: 'desc' }, select: { period: true },
+  });
+  const period = latestPay ? latestPay.period : null;
+  const [payroll, assigned] = await Promise.all([
+    period
+      ? prisma.doctorPayrollMonth.findMany({ where: { period }, select: { doctorName: true } })
+      : Promise.resolve([]),
+    prisma.doctorScheme.findMany({
+      where: { active: true, schemeId: { not: null } },
+      include: { scheme: { select: { hourlyRate: true, fixedBasic: true } } },
+    }),
+  ]);
+  if (payroll.length) {
+    const paid = new Set(payroll.map((p) => p.doctorName.trim().toLowerCase()));
+    /* The ones whose scheme does not count hours are the ones nobody thinks to
+       put in an attendance sheet — named separately, because for them the
+       absence is systematic rather than an oversight. */
+    const missing = assigned.filter((d) => !paid.has(d.doctorName.trim().toLowerCase()));
+    const noHours = missing.filter((d) => d.scheme && d.scheme.hourlyRate == null
+      && d.scheme.fixedBasic != null);
+    if (noHours.length) {
+      items.push({
+        key: `payroll:nohours:${period}`,
+        severity: 'overdue',
+        title: `${noHours.length} doctor${noHours.length === 1 ? '' : 's'} on a no-hours scheme `
+          + `${noHours.length === 1 ? 'is' : 'are'} missing from the ${period} payroll`,
+        cost: 'Their schemes do not count hours, so nobody records their attendance and they are '
+          + 'absent from the file every month — which means no payslip at all, however much '
+          + 'commission they earned.',
+        detail: `${noHours.map((d) => d.doctorName).join(', ')}. Add them to the payroll sheet with `
+          + 'hours left blank, so deductions and adjustments have somewhere to live.',
+        metric: { period, missing: noHours.length, loaded: payroll.length },
+        action: { tab: 'data' },
+      });
+    }
+  }
+
+  return items;
+}
+
+/**
  * Everything, ranked.
  *
  *   build() -> { at, items, counts, clean }
@@ -275,6 +388,7 @@ async function build(at = new Date()) {
 
   const sources = [
     ['periods', periods], ['feeds', feeds], ['mappings', mappings], ['commission', commission],
+    ['plan', planChecks],
   ];
   const items = [];
   for (const [name, fn] of sources) {

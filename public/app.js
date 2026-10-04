@@ -7,12 +7,10 @@
    a different answer from the API.
    ============================================================ */
 
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d = 0) =>
-  (n === null || n === undefined || Number.isNaN(n)) ? '\u2014'
-    : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+/* From public/fmt.js — one copy of these for every page. They had drifted
+   apart by 2026-10-04 (two `pc`, two `esc`); see that file. */
+const { $, fmt, escAll: esc } = Fmt;
 const pct = (a, b) => (!b ? 0 : (a / b) * 100);
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const { iso } = Rules;
 
 let DATA = null;

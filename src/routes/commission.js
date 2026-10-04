@@ -487,6 +487,390 @@ module.exports = async function (app) {
     return { ok: true, doctors: await Schemes.assignments() };
   });
 
+  /* ================================================================
+     COMMISSION POLICY v3.2 — the editor's read and its four writes.
+
+     v2.8's own tier ladder is rendered READ-ONLY on this page and has no route
+     at all; it is written by seed scripts. v3.2 gets a real editor because it
+     is the policy in force, and the figures in it are what people are paid.
+
+     Both are stored on purpose. Nothing here touches a v2.8 table.
+     ================================================================ */
+
+  /** Everything the v3.2 editor draws, in one trip. */
+  app.get('/api/policy/v32', { preHandler: app.requireUser }, async () => {
+    const Plan = require('../lib/targets-plan.js');
+    const [policy, staff, branches] = await Promise.all([
+      Plan.policy(),
+      prisma.commissionStaff.findMany({ orderBy: [{ branchId: 'asc' }, { role: 'asc' }, { name: 'asc' }] }),
+      prisma.commissionBranch.findMany({
+        where: { active: true }, select: { id: true, name: true, area: true, entity: true },
+        orderBy: { sortOrder: 'asc' },
+      }),
+    ]);
+    return { policy, staff, branches };
+  });
+
+  /**
+   * The five achievement levels.
+   *
+   * THEY MUST ASCEND, and the first is the floor the whole policy turns on.
+   * Saved out of order, `levelOf` walks the list and keeps the last match — so
+   * a 95 sitting above a 100 would quietly pay the 95 column to a branch that
+   * reached 100.
+   */
+  app.put('/api/policy/levels', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const b = req.body || {};
+    const version = str(b.version, 'Policy version', 40);
+    const rows = Array.isArray(b.levels) ? b.levels : [];
+    if (!rows.length) return reply.code(400).send({ error: 'No levels to save.' });
+    let parsed;
+    try {
+      parsed = rows.map((r, i) => {
+        const level = Math.round(Number(r.level));
+        if (!Number.isInteger(level) || level <= 0 || level > 1000) {
+          throw new Error(`Row ${i + 1}: "${r.level}" is not a level.`);
+        }
+        return { version, level, fromPct: share(r.fromPct, `Level ${level}`) };
+      }).sort((x, y) => x.level - y.level);
+      for (let i = 1; i < parsed.length; i++) {
+        if (parsed[i].fromPct <= parsed[i - 1].fromPct) {
+          throw new Error(`Level ${parsed[i].level} starts at or below level ${parsed[i - 1].level}. `
+            + 'The levels have to rise, or the higher one can never be reached.');
+        }
+      }
+      if (parsed.some((x) => x.fromPct == null)) throw new Error('Every level needs a threshold.');
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.commissionLevel.deleteMany({ where: { version } });
+      for (const l of parsed) await tx.commissionLevel.create({ data: l });
+    });
+    await app.audit(req, 'policy-levels', `${version}: ${parsed.map((l) => l.level).join(', ')}`);
+    const Plan = require('../lib/targets-plan.js');
+    return { ok: true, policy: await Plan.policy() };
+  });
+
+  /**
+   * The pool grid — 14 revenue tiers by 5 level columns.
+   *
+   * OVERLAPPING TIERS ARE REFUSED, for the reason the scheme-band editor
+   * already refuses them: the same revenue reading two rows pays whichever the
+   * lookup finds first, and which that is depends on storage order.
+   */
+  app.put('/api/policy/pools', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const b = req.body || {};
+    const version = str(b.version, 'Policy version', 40);
+    const rows = Array.isArray(b.tiers) ? b.tiers : [];
+    if (!rows.length) return reply.code(400).send({ error: 'No tiers to save.' });
+    if (rows.length > 60) return reply.code(400).send({ error: 'Too many tiers.' });
+    let parsed;
+    try {
+      parsed = rows.map((r, i) => {
+        const tierNo = Math.round(Number(r.tierNo));
+        if (!Number.isInteger(tierNo)) throw new Error(`Row ${i + 1} has no tier number.`);
+        const from = Number(String(r.from == null ? 0 : r.from).replace(/,/g, ''));
+        const to = (r.to === '' || r.to == null) ? null : Number(String(r.to).replace(/,/g, ''));
+        if (!Number.isFinite(from) || from < 0) throw new Error(`Tier ${tierNo} starts at something that is not a number.`);
+        if (to !== null && (!Number.isFinite(to) || to < from)) throw new Error(`Tier ${tierNo} ends below where it starts.`);
+        const pools = (Array.isArray(r.pools) ? r.pools : []).map((v, j) => {
+          const n = Number(String(v == null || v === '' ? 0 : v).replace(/,/g, ''));
+          if (!Number.isFinite(n) || n < 0) throw new Error(`Tier ${tierNo}, column ${j + 1}: "${v}" is not an amount.`);
+          return Number(n.toFixed(2));
+        });
+        if (!pools.length) throw new Error(`Tier ${tierNo} has no pool figures.`);
+        /* A pool that falls as achievement rises is almost always a typo, and
+           it would pay a team more for doing worse. */
+        for (let j = 1; j < pools.length; j++) {
+          if (pools[j] < pools[j - 1]) {
+            throw new Error(`Tier ${tierNo}: column ${j + 1} pays ${pools[j]} where column ${j} pays `
+              + `${pools[j - 1]}. A higher level cannot pay less.`);
+          }
+        }
+        return { version, tierNo, revFrom: from, revTo: to, pools };
+      }).sort((x, y) => Number(x.revFrom) - Number(y.revFrom));
+      /* ---- TOUCHING BOUNDS ARE ALLOWED; CROSSING ONES ARE NOT ----
+         The stored policy writes its tiers as 0–500,000 then 500,000–750,000:
+         the bounds TOUCH, so exactly 500,000 satisfies both. `tierOf` takes the
+         first match and therefore the LOWER tier, deterministically — which is
+         one piastre of ambiguity carried from the source workbook rather than
+         invented here, and it is left alone for the same reason the Exclusive
+         scheme's band gap is left alone.
+
+         A validator stricter than the data it must save is a validator that
+         cannot save the policy it was given: refusing `<=` here meant the grid
+         could be read and never written back. What is refused is a tier that
+         genuinely CROSSES the one before it, where the overlap spans a range
+         and the answer depends on storage order. */
+      for (let i = 1; i < parsed.length; i++) {
+        const prev = parsed[i - 1];
+        if (prev.revTo === null) throw new Error('Only the top tier may be open-ended.');
+        if (Number(parsed[i].revFrom) < Number(prev.revTo)) {
+          throw new Error(`Tiers overlap: ${prev.revFrom}–${prev.revTo} and ${parsed[i].revFrom}–`
+            + `${parsed[i].revTo == null ? 'above' : parsed[i].revTo} share a range. The same revenue `
+            + 'would read two different pools, and which one would depend on storage order.');
+        }
+      }
+      const widths = [...new Set(parsed.map((p) => p.pools.length))];
+      if (widths.length !== 1) throw new Error(`The rows are ${widths.join(' and ')} columns wide. They must match.`);
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.commissionPool.deleteMany({ where: { version } });
+      for (const t of parsed) await tx.commissionPool.create({ data: t });
+    });
+    await app.audit(req, 'policy-pools', `${version}: ${parsed.length} tiers`);
+    const Plan = require('../lib/targets-plan.js');
+    return { ok: true, policy: await Plan.policy() };
+  });
+
+  /**
+   * Role headcount and weight.
+   *
+   * A person earns `pool x weight / sum(people x weight)`, so changing ANY
+   * weight re-cuts everybody's share — not just that role's. The editor shows
+   * the resulting percentage beside each row for exactly that reason.
+   */
+  app.put('/api/policy/roles', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const b = req.body || {};
+    const version = str(b.version, 'Policy version', 40);
+    const rows = Array.isArray(b.roles) ? b.roles : [];
+    if (!rows.length) return reply.code(400).send({ error: 'No roles to save.' });
+    let parsed;
+    try {
+      parsed = rows.map((r, i) => {
+        const role = str(r.role, `Role ${i + 1}`, 60);
+        const people = Math.round(Number(r.people));
+        const weight = Number(String(r.weight).replace(/,/g, ''));
+        if (!Number.isInteger(people) || people < 0 || people > 99) {
+          throw new Error(`${role}: "${r.people}" is not a headcount.`);
+        }
+        if (!Number.isFinite(weight) || weight <= 0 || weight > 100) {
+          throw new Error(`${role}: a weight must be above zero. "${r.weight}" is not.`);
+        }
+        return {
+          version, role, people, weight: Number(weight.toFixed(2)),
+          notes: String(r.notes || '').slice(0, 300) || null,
+          sortOrder: Number(r.sortOrder) || i + 1,
+        };
+      });
+      const W = parsed.reduce((a, r) => a + r.people * r.weight, 0);
+      if (!W) throw new Error('Every role has a headcount of zero, so no pool could be split.');
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.commissionRoleWeight.deleteMany({ where: { version } });
+      for (const r of parsed) await tx.commissionRoleWeight.create({ data: r });
+    });
+    await app.audit(req, 'policy-roles', `${version}: ${parsed.map((r) => `${r.role} x${r.people}`).join(', ')}`);
+    const Plan = require('../lib/targets-plan.js');
+    return { ok: true, policy: await Plan.policy() };
+  });
+
+  /**
+   * The staff list — who is actually in each branch team.
+   *
+   * Without it a staff payslip can only say "Reception 1": the share is right
+   * and nobody can be paid from it. Rows carry a `remove` flag rather than
+   * being deleted by omission, so a failed render cannot wipe a branch's team.
+   */
+  app.put('/api/commission/staff', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const rows = Array.isArray(req.body && req.body.staff) ? req.body.staff : [];
+    if (!rows.length) return reply.code(400).send({ error: 'Nobody to save.' });
+    if (rows.length > 500) return reply.code(400).send({ error: 'Too many people in one save.' });
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const r of rows) {
+          if (r.remove && r.id) { await tx.commissionStaff.delete({ where: { id: Number(r.id) } }); continue; }
+          const branchId = Number(r.branchId);
+          if (!Number.isInteger(branchId)) throw new Error(`"${r.name || '(no name)'}" has no branch.`);
+          const data = {
+            branchId,
+            role: str(r.role, 'Role', 60),
+            name: str(r.name, 'Name', 120),
+            payMethod: String(r.payMethod || '').slice(0, 60) || null,
+            bankAcc: String(r.bankAcc || '').slice(0, 80) || null,
+            active: r.active === undefined ? true : !!r.active,
+          };
+          if (r.id) await tx.commissionStaff.update({ where: { id: Number(r.id) }, data });
+          else await tx.commissionStaff.create({ data });
+        }
+      });
+    } catch (e) {
+      return reply.code(400).send({
+        error: /Unique constraint/.test(e.message)
+          ? 'That person is already listed for that branch and role.' : e.message,
+      });
+    }
+    await app.audit(req, 'commission-staff', `${rows.length} row${rows.length === 1 ? '' : 's'}`);
+    return {
+      ok: true,
+      staff: await prisma.commissionStaff.findMany({ orderBy: [{ branchId: 'asc' }, { role: 'asc' }, { name: 'asc' }] }),
+    };
+  });
+
+  /* ================================================================
+     THE PLAN — branch and doctor targets, 2026 through 2027.
+
+     Branch targets go into `CommissionTarget`, the table the 2026 grid already
+     uses: it is keyed on branch, year and month, so a second year needed no new
+     table and the existing editor and scoring rules pick the rows up unchanged.
+
+     Doctor targets get their own table. `DoctorTarget` belongs to a PUBLISHED
+     MONTHLY SHEET with draft, reconcile and publish semantics around it; a
+     multi-year plan of 62 doctors by 18 months is not that, and forcing it in
+     would have meant eighteen fake sheets.
+     ================================================================ */
+
+  /** Save branch target cells. Batched, because the thing being edited is a grid. */
+  app.put('/api/plan/targets', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const cells = Array.isArray(req.body && req.body.cells) ? req.body.cells : [];
+    if (!cells.length) return reply.code(400).send({ error: 'No cells to save.' });
+    if (cells.length > 2000) return reply.code(400).send({ error: 'Too many cells in one save.' });
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const c of cells) {
+          const branchId = Number(c.branchId);
+          const year = Number(c.year);
+          const month = Number(c.month);
+          if (!Number.isInteger(branchId) || !Number.isInteger(year) || !Number.isInteger(month)
+            || year < YEAR_MIN || year > YEAR_MAX || month < 1 || month > 12) {
+            throw new Error(`Not a branch-month: ${JSON.stringify(c)}`);
+          }
+          /* BLANK DELETES, it does not write zero. A month with no target and a
+             month whose target is nothing are different claims, and the report
+             colours them differently. */
+          const raw = String(c.target == null ? '' : c.target).trim();
+          if (raw === '') {
+            await tx.commissionTarget.deleteMany({ where: { branchId, year, month } });
+            continue;
+          }
+          const target = money(raw, `Target for ${year}-${month}`);
+          await tx.commissionTarget.upsert({
+            where: { branchId_year_month: { branchId, year, month } },
+            update: { target },
+            create: { branchId, year, month, target },
+          });
+        }
+      });
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    await app.audit(req, 'plan-targets', `${cells.length} cell${cells.length === 1 ? '' : 's'}`);
+    const Plan = require('../lib/targets-plan.js');
+    return { ok: true, plan: await Plan.branchPlan() };
+  });
+
+  /** Save doctor target cells, same contract. */
+  app.put('/api/plan/doctors', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const cells = Array.isArray(req.body && req.body.cells) ? req.body.cells : [];
+    if (!cells.length) return reply.code(400).send({ error: 'No cells to save.' });
+    if (cells.length > 4000) return reply.code(400).send({ error: 'Too many cells in one save.' });
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const c of cells) {
+          const doctorName = str(c.doctorName, 'Doctor name', 120);
+          const period = String(c.period || '').trim();
+          if (!/^\d{4}-\d{2}$/.test(period)) throw new Error(`"${period}" is not a month.`);
+          const raw = String(c.target == null ? '' : c.target).trim();
+          if (raw === '') {
+            await tx.doctorPlanMonth.deleteMany({ where: { doctorName, period } });
+            continue;
+          }
+          const target = money(raw, `${doctorName} ${period}`);
+          const groupName = c.groupName === undefined ? undefined
+            : (String(c.groupName || '').trim() || null);
+          await tx.doctorPlanMonth.upsert({
+            where: { doctorName_period: { doctorName, period } },
+            update: groupName === undefined ? { target } : { target, groupName },
+            create: { doctorName, period, target, groupName: groupName || null },
+          });
+        }
+      });
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    await app.audit(req, 'plan-doctors', `${cells.length} cell${cells.length === 1 ? '' : 's'}`);
+    const Plan = require('../lib/targets-plan.js');
+    return { ok: true, plan: await Plan.doctorPlan() };
+  });
+
+  /**
+   * Carry a month forward.
+   *
+   * The question Mina asked first and most often: how do I add next month's
+   * targets without typing 73 numbers. It copies one month onto another, with
+   * an optional uplift, and REFUSES to write over a month that already has
+   * figures unless asked — the one mistake that would be silent.
+   */
+  app.post('/api/plan/carry', { preHandler: requireWriter }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const b = req.body || {};
+    const from = String(b.from || '').trim();
+    const to = String(b.to || '').trim();
+    const kind = b.kind === 'doctors' ? 'doctors' : 'branches';
+    if (!/^\d{4}-\d{2}$/.test(from) || !/^\d{4}-\d{2}$/.test(to)) {
+      return reply.code(400).send({ error: 'Both months must be written as YYYY-MM.' });
+    }
+    if (from === to) return reply.code(400).send({ error: 'A month cannot be carried onto itself.' });
+    const uplift = b.uplift == null || b.uplift === '' ? 0 : Number(b.uplift);
+    if (!Number.isFinite(uplift) || uplift < -50 || uplift > 200) {
+      return reply.code(400).send({ error: 'The uplift must be a percentage between -50 and 200.' });
+    }
+    const factor = 1 + uplift / 100;
+    const [ty, tm] = to.split('-').map(Number);
+    const [fy, fm] = from.split('-').map(Number);
+
+    try {
+      const out = await prisma.$transaction(async (tx) => {
+        if (kind === 'branches') {
+          const src = await tx.commissionTarget.findMany({ where: { year: fy, month: fm } });
+          if (!src.length) throw new Error(`${from} has no branch targets to carry.`);
+          const already = await tx.commissionTarget.count({ where: { year: ty, month: tm } });
+          if (already && !b.overwrite) {
+            throw new Error(`${to} already has ${already} branch target(s). Tick "replace" to overwrite them.`);
+          }
+          for (const r of src) {
+            const target = Math.round(Number(r.target) * factor * 100) / 100;
+            await tx.commissionTarget.upsert({
+              where: { branchId_year_month: { branchId: r.branchId, year: ty, month: tm } },
+              update: { target }, create: { branchId: r.branchId, year: ty, month: tm, target },
+            });
+          }
+          return { written: src.length };
+        }
+        const src = await tx.doctorPlanMonth.findMany({ where: { period: from } });
+        if (!src.length) throw new Error(`${from} has no doctor targets to carry.`);
+        const already = await tx.doctorPlanMonth.count({ where: { period: to } });
+        if (already && !b.overwrite) {
+          throw new Error(`${to} already has ${already} doctor target(s). Tick "replace" to overwrite them.`);
+        }
+        for (const r of src) {
+          const target = Math.round(Number(r.target) * factor * 100) / 100;
+          await tx.doctorPlanMonth.upsert({
+            where: { doctorName_period: { doctorName: r.doctorName, period: to } },
+            update: { target }, create: { doctorName: r.doctorName, period: to, target, groupName: r.groupName },
+          });
+        }
+        return { written: src.length };
+      });
+      await app.audit(req, 'plan-carry', `${kind} ${from} → ${to}${uplift ? ` +${uplift}%` : ''}: ${out.written} rows`);
+      const Plan = require('../lib/targets-plan.js');
+      return { ok: true, ...out, plan: kind === 'branches' ? await Plan.branchPlan() : await Plan.doctorPlan() };
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
+
   /** Mark one of the workbook's 17 open questions resolved, so the blocker count
    *  on the page reflects decisions actually taken. */
   app.put('/api/commission/notes/:id', { preHandler: requireWriter }, async (req, reply) => {

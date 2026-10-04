@@ -24,9 +24,121 @@ const page = (app, url, name) => app.get(url, async (req, reply) =>
 
 module.exports = async function (app) {
   page(app, '/targets', 'targets');
+  /* Commission & Payslips. A second page rather than more tabs on Targets: the
+     two measure different things on different bases — doctors against the
+     approved sheet in INVOICED revenue, branches against the policy in CASH
+     COLLECTED — and they are not expected to agree. Both read the same
+     endpoint, so the two halves can never describe different months. */
+  page(app, '/commission', 'commission');
   page(app, '/commercial', 'commercial');
   page(app, '/patients', 'patients');
   page(app, '/commercial-sales', 'commercial-sales');
+
+  /* ------------------------------------------------------------- plan --- */
+
+  /**
+   * The 2027 plan, the v3.2 policy and the frozen history.
+   *
+   * ETAGGED, which none of the other endpoints are, and for a reason that only
+   * applies here: everything in this answer is a decision somebody made in
+   * Admin, so it changes when somebody saves and at no other time. A sync does
+   * not move it, and neither does changing the date range. A reader who opens
+   * the report five times a day should pay for it once.
+   *
+   * The tag is built from row counts and the newest `updatedAt` across every
+   * table behind it — a count alone would miss an edited cell, a timestamp
+   * alone would miss a deletion.
+   */
+  app.get('/api/targets-plan', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const Plan = require('../lib/targets-plan.js');
+    const tag = await Plan.etag();
+    reply.header('ETag', tag);
+    /* `no-cache` rather than `no-store`: the browser MAY keep it, but has to
+       ask before reusing it. That is what makes the 304 below possible. */
+    reply.header('Cache-Control', 'private, no-cache');
+    if (req.headers['if-none-match'] === tag) return reply.code(304).send();
+    return Plan.build();
+  });
+
+  /* ------------------------------------------------------- commission --- */
+
+  /**
+   * What everyone earns, on the v3.2 policy.
+   *
+   * Named hyphenated rather than `/api/commission/...`, which belongs to the
+   * Admin editor: a reader should not have to work out whether an endpoint
+   * reports or edits.
+   */
+  app.get('/api/commission-month', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const today = iso(new Date());
+    const to = isDate(req.query.to) ? req.query.to : today;
+    const from = isDate(req.query.from) ? req.query.from : `${to.slice(0, 7)}-01`;
+    if (from > to) return reply.code(400).send({ error: '"From" is after "To".' });
+    const V = require('../lib/commission-v32.js');
+    const Commission = require('../lib/commission.js');
+    const [built, rates, members] = await Promise.all([
+      V.build({ from, to }),
+      Commission.loadCallCenter ? Commission.loadCallCenter() : Promise.resolve(null),
+      Promise.resolve(null),
+    ]);
+    return { ...built, callCentre: rates || null };
+  });
+
+  /* ------------------------------------------------------------- live --- */
+
+  /**
+   * What is happening right now, against the plan.
+   *
+   * THE COLLECTED TOTAL HERE EQUALS `/api/targets-tracker`'s net collection for
+   * the same range, to the piastre, because both come from the same call. The
+   * audit asserts it on every run — the two pages describing one month's cash
+   * differently is the single worst thing this report could do.
+   */
+  app.get('/api/targets-live', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const today = iso(new Date());
+    const to = isDate(req.query.to) ? req.query.to : today;
+    const from = isDate(req.query.from) ? req.query.from : `${to.slice(0, 7)}-01`;
+    if (from > to) return reply.code(400).send({ error: '"From" is after "To".' });
+    return require('../lib/targets-live.js').build({ from, to });
+  });
+
+  /**
+   * One branch, broken down. Fetched when a reader expands the row.
+   *
+   * THE BRANCH IS A QUERY PARAMETER, NOT A PATH SEGMENT, deliberately: the test
+   * harness keys its fetch stub on the path alone, so `/api/targets-live/branch/1`
+   * would need a stub per branch while this needs one.
+   */
+  app.get('/api/targets-live-branch', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const name = String(req.query.name || '').trim();
+    if (!name) return reply.code(400).send({ error: 'Which branch?' });
+    const today = iso(new Date());
+    const to = isDate(req.query.to) ? req.query.to : today;
+    const from = isDate(req.query.from) ? req.query.from : `${to.slice(0, 7)}-01`;
+    return require('../lib/targets-live.js').branch({ name, from, to });
+  });
+
+  /** A year of actuals with the prior year beside them. */
+  app.get('/api/targets-actuals', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const year = Number(req.query.year) || new Date().getUTCFullYear();
+    if (year < 2000 || year > 2100) return reply.code(400).send({ error: 'That is not a year.' });
+    return require('../lib/targets-live.js').actuals({ year });
+  });
 
   /* ---------------------------------------------------------- targets --- */
 

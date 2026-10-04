@@ -25,6 +25,28 @@
    ============================================================ */
 
 const { prisma } = require('./db.js');
+
+/**
+ * An Odoo category to a commission department.
+ *
+ * MOVED TO MODULE SCOPE AND EXPORTED on 2026-10-04, unchanged. It was a local
+ * inside `buildExtras`, and the Service targets panel needed the same mapping —
+ * a second copy would have been a second answer to "is this an injection", and
+ * the multipliers hang off that answer.
+ *
+ * The rules and why their ORDER is load-bearing are documented where this is
+ * used, in the service-mix block below.
+ */
+const familyOf = (category) => {
+  const parts = String(category).split('/');
+  const leaf = (parts[parts.length - 1] || '').trim().toLowerCase();
+  const head = (parts[0] || '').trim().toLowerCase();
+  if (/body\s*contour/.test(leaf)) return 'body';
+  if (head.startsWith('device') || head.includes('laser')) return 'laser';
+  if (head.startsWith('inject')) return 'inj';
+  if (head.startsWith('body')) return 'body';
+  return 'other';
+};
 const R = require('./commission-rules.js');
 
 const r2 = (v) => Math.round((Number(v || 0) + Number.EPSILON) * 100) / 100;
@@ -145,9 +167,16 @@ async function buildTracker({ year, month, from, to }) {
   const share = elapsed / daysInMonth;
   const vatDivisor = (cfgPolicy && cfgPolicy.vatDivisor) || R.VAT_DIVISOR;
 
-  const rows = branches.map((b) => {
-    const t = targetOf.get(b.id) || null;
-    const target = t ? d(t.target) : null;
+  /* ---- A BRANCH WITH NO TARGET FOR THIS MONTH IS NOT SCORED ----
+     Same reason as `commission.js monthView`: Golden Square was added in
+     October 2026 with a plan beginning April 2027, and scored anyway it sat in
+     every 2026 month at 0% and in `unmatched`, which this report prints in red
+     as "1 branch unmatched". It is not unmatched — it has nothing to match yet.
+     A branch with no `CommissionTarget` row for the month is filtered out; a
+     row holding an explicit zero is a deliberate zero and still scores. */
+  const rows = branches.filter((b) => targetOf.has(b.id)).map((b) => {
+    const t = targetOf.get(b.id);
+    const target = d(t.target);
     /* Per-branch band overrides still win over the version's defaults — a branch
        allowed a different floor for one month keeps it. */
     const bands = R.bandsFor(t || {}, policy.bands);
@@ -539,16 +568,7 @@ async function buildExtras({ from, to }) {
      placed on the body, not body contouring, and report 01's own 105,806 figure
      matches Body Contouring alone rather than the two summed. Matching on a bare
      "body" would swallow it and overstate the department by 54%. */
-  const familyOf = (category) => {
-    const parts = String(category).split('/');
-    const leaf = (parts[parts.length - 1] || '').trim().toLowerCase();
-    const head = (parts[0] || '').trim().toLowerCase();
-    if (/body\s*contour/.test(leaf)) return 'body';
-    if (head.startsWith('device') || head.includes('laser')) return 'laser';
-    if (head.startsWith('inject')) return 'inj';
-    if (head.startsWith('body')) return 'body';
-    return 'other';
-  };
+  /* `familyOf` is module scope now — see the top of this file. */
 
   const branchMix = new Map();
   const catTotals = new Map();
@@ -760,4 +780,4 @@ async function branchEntities() {
   };
 }
 
-module.exports = { buildTracker, buildTrackerRange, buildExtras, branchEntities, compareVersions, policyFor, collectionByBranch };
+module.exports = { buildTracker, buildTrackerRange, buildExtras, branchEntities, compareVersions, policyFor, collectionByBranch, familyOf };

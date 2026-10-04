@@ -222,6 +222,166 @@ const W = { from: '2026-08-01', to: '2026-08-19' };
     assert.ok(/7888/.test(load.notes) && /4404/.test(load.notes));
   });
 
+
+  /* ------------------------------------------------------------------
+     THE HOURLY DOUBLE-COUNT.
+
+     hours() used to read the whole PbxHour table with no window filter and no
+     preferUpload, while every other PBX function did both. With one seed that
+     was correct. This writes a second window beside the seed and asserts the
+     total does not grow — the assertion the old code fails.
+     ------------------------------------------------------------------ */
+  console.log('\nthe hourly profile is one window, not a sum of all of them');
+
+  /* THE REALISTIC SHAPE: a weekly UCM upload writes DATED hour rows. One for
+     5 August — a day the seed's whole-window profile already counts — must not
+     be added on top of it. (Until 2026-10-04 this test used an undated upload
+     row, a shape no upload produces any more.) */
+  const beforeHours = await CC.hours({ ...W, cov: await CC.pbxCoverage() });
+  const baseCalls = beforeHours.list.reduce((t, h) => t + h.calls, 0);
+  let hourRow = null;
+  try {
+    hourRow = await prisma.pbxHour.create({
+      data: { date: new Date('2026-08-05T00:00:00Z'), hour: 12, calls: 9999, answered: 9999, source: 'upload' },
+    });
+    const after = await CC.hours({ ...W, cov: await CC.pbxCoverage() });
+    const afterCalls = after.list.reduce((t, h) => t + h.calls, 0);
+    await check('a dated upload for a day the seed profile already counts is NOT added on top', async () => {
+      assert.strictEqual(afterCalls, baseCalls,
+        `the hourly total moved by ${afterCalls - baseCalls}; 5 August would be counted twice`);
+    });
+    await check('  and the out-of-hours figure is not double-counted either', async () => {
+      assert.strictEqual(after.outOfHours.calls, beforeHours.outOfHours.calls);
+    });
+  } finally {
+    /* Removed whether or not the assertions passed, so a failure cannot leave
+       9,999 fabricated calls in the database. */
+    if (hourRow) await prisma.pbxHour.delete({ where: { id: hourRow.id } });
+  }
+
+  /* It said "a typical day" until 2026-10-04, which was wrong: the seed's hour
+     rows are TOTALS over the whole window (4,183 calls), not an average day. */
+  await check('the seed\'s hourly profile says it is the whole window, not the range', async () => {
+    const h = await CC.hours({ ...W, cov: await CC.pbxCoverage() });
+    assert.strictEqual(h.grain, 'window-total');
+    assert.ok(/not the range above/.test(h.note || ''), 'the grain is not stated in words');
+  });
+  await check('  and a range the seed does not touch does NOT borrow its hourly profile', async () => {
+    const h = await CC.hours({ from: '2026-09-27', to: '2026-10-03', cov: await CC.pbxCoverage() });
+    const seedOnly = h.list.filter((x) => x.source === 'seed').length;
+    assert.strictEqual(seedOnly, 0, `${seedOnly} August hour rows counted inside a September week`);
+  });
+
+  /* ------------------------------------------------------------------
+     THE PEOPLE HALF.
+     ------------------------------------------------------------------ */
+  const ccSeeded = await prisma.ccOpportunity.count({ where: { source: 'seed' } });
+  if (ccSeeded) {
+    console.log('\nthe contact-centre snapshot, reproduced out of Postgres');
+
+    const S = await CC.build({ from: '2026-09-01', to: '2026-10-10', scope: 'all', today: '2026-10-04' });
+
+    await check('the opportunity aggregate reproduces the source page exactly', async () => {
+      const T = S.summary.totals;
+      assert.strictEqual(T.n, 2955, `n is ${T.n}`);
+      assert.strictEqual(T.booked, 2388, `booked is ${T.booked}`);
+      /* 1,435 and NOT 1,576. The page's own agg() skips opportunities that
+         booked nothing before testing the show flag, so 141 patients who
+         arrived through an opportunity that never booked are excluded. Pinned
+         because the looser count is the easy mistake and it overstates the
+         contact centre by 141 patients. */
+      assert.strictEqual(T.showed, 1435, `showed is ${T.showed}`);
+      assert.strictEqual(T.ownBooking, 1139, `ownBooking is ${T.ownBooking}`);
+      assert.strictEqual(Math.round(T.revenue), 6487562, `revenue is ${T.revenue}`);
+    });
+
+    await check('the show-rate denominator excludes bookings not yet due', async () => {
+      const T = S.summary.totals;
+      assert.strictEqual(T.past, T.booked - T.upcoming);
+      assert.ok(T.upcoming > 0, 'no upcoming bookings in range — this test proves nothing');
+    });
+
+    await check('the credit gap is carried as a figure, not left to be subtracted', async () => {
+      const T = S.summary.totals;
+      assert.strictEqual(T.lostCredit, T.showed - T.ownBooking);
+      assert.strictEqual(T.lostCredit, 296, `lostCredit is ${T.lostCredit}`);
+    });
+
+    await check('appointments exclude rescheduled rows from every total', async () => {
+      const A = S.appointments.totals;
+      assert.ok(A.rescheduled > 0, 'no rescheduled rows in range');
+      const rows = await prisma.ccAppointment.count({
+        where: { date: { gte: new Date('2026-09-26T00:00:00Z'), lte: new Date('2026-10-10T00:00:00Z') } },
+      });
+      assert.strictEqual(A.n + A.rescheduled, rows, `${A.n} + ${A.rescheduled} != ${rows}`);
+    });
+
+    await check('a range reaching the future uses "arrived so far", not show rate', async () => {
+      assert.strictEqual(S.appointments.totals.showMetric, 'arrivedRate');
+      const past = await CC.build({ from: '2026-09-26', to: '2026-09-30', scope: 'all', today: '2026-10-04' });
+      assert.strictEqual(past.appointments.totals.showMetric, 'showRate');
+    });
+
+    await check('median time to booking ignores the never-booked rather than counting them zero', async () => {
+      const T = S.crm.totals;
+      assert.strictEqual(T.measuredOn + T.neverBooked, T.leads);
+      assert.strictEqual(T.measuredOn, T.booked, 'measured on a different set from the booked one');
+    });
+
+    /* The three refusals. Each is a field the export does not carry, and each
+       would otherwise render as an empty table that reads "nobody did this". */
+    await check('lead source refuses, and blames the export rather than Odoo alone', async () => {
+      assert.strictEqual(S.crm.leadSource.available, false);
+      assert.strictEqual(S.crm.leadSource.measured, false);
+      assert.ok(/does not carry the Source/.test(S.crm.leadSource.why));
+      assert.ok(S.crm.leadSource.alsoTrue, 'the separate Odoo finding is not stated');
+    });
+    await check('  activities are labelled by login because the person is not in the export', async () => {
+      assert.strictEqual(S.crm.activities.personAvailable, false);
+      assert.strictEqual(S.crm.activities.grain, 'login');
+      assert.ok(/not in this export/.test(S.crm.activities.why));
+    });
+    await check('  re-booking says it can only name a login', async () => {
+      assert.strictEqual(S.crm.rebooking.personAvailable, false);
+      assert.strictEqual(S.crm.rebooking.credited + S.crm.rebooking.lost, S.crm.rebooking.total);
+    });
+
+    await check('a range neither snapshot reaches refuses on every section', async () => {
+      const none = await CC.build({ from: '2025-01-01', to: '2025-01-31', scope: 'all', today: '2026-10-04' });
+      for (const k of ['summary', 'crm', 'appointments', 'people', 'timing', 'branches']) {
+        assert.strictEqual(none[k].window.any, false, `${k} answered for a range it does not hold`);
+        assert.ok(/does not touch it/.test(none[k].window.note || ''), `${k} gives no reason`);
+      }
+    });
+
+    await check('the seeder recorded what the snapshot cannot carry', async () => {
+      const load = await prisma.dataUpload.findFirst({
+        where: { kind: 'cc:seed' }, orderBy: { createdAt: 'desc' },
+      });
+      assert.ok(load, 'no load record for the contact-centre seed');
+      assert.ok(/GAP lead source/.test(load.notes), 'the lead-source gap was not recorded');
+      assert.ok(/GAP activity person/.test(load.notes));
+      assert.ok(/snapshot 2026-10-03 18:15/.test(load.notes), 'the real snapshot time was not recorded');
+    });
+
+    await check('the extension map names every extension the call data holds', async () => {
+      const exts = await prisma.pbxAgentDay.findMany({ distinct: ['ext'], select: { ext: true } });
+      const map = new Map((await prisma.pbxExtension.findMany()).map((e) => [e.ext, e]));
+      const missing = exts.filter((e) => !map.has(e.ext)).map((e) => e.ext);
+      assert.strictEqual(missing.length, 0, `not in the map: ${missing.join(', ')}`);
+    });
+
+    await check('  and an extension the phone system disagrees about is flagged, not resolved', async () => {
+      const A = await CC.build({ ...W, today: '2026-10-04' });
+      const bad = A.agents.agents.filter((a) => a.nameConflict);
+      assert.strictEqual(bad.length, 1, `expected one conflict, found ${bad.length}`);
+      assert.strictEqual(bad[0].ext, '6008');
+      assert.ok(bad[0].cdrName && bad[0].phoneName && bad[0].cdrName !== bad[0].phoneName);
+    });
+  } else {
+    console.log('\nNo contact-centre snapshot loaded — run scripts/import-contact-centre-html.js. Skipping that half.');
+  }
+
   console.log(failures ? `\n[31m${failures} failed[0m\n` : '\n[32mall passed[0m\n');
   await prisma.$disconnect();
   process.exit(failures ? 1 : 0);

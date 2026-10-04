@@ -208,6 +208,11 @@ async function build({ from, to }) {
     rows.push({
       name,
       scheme: doctor ? doctor.schemeName : null,
+      /* What the scheme pays regardless of attendance. Carried even when there
+         is no payslip, because it is owed either way and a headline that leaves
+         it out is short by the three fixed-basic schemes every month. */
+      schemeFixedBasic: doctor && doctor.scheme && doctor.scheme.fixedBasic != null
+        ? Number(doctor.scheme.fixedBasic) : 0,
       onScheme: !!(doctor && doctor.schemeId),
       ex,
       inc: r ? r.inc : 0,

@@ -44,7 +44,14 @@
   const TG_SORT_KEY = 'nrs-tgsort';
   /* Same reason as `wire`: under the harness this module has no `localStorage`
      either, and an unguarded read throws before the first sort can be read. */
-  const store = () => (typeof localStorage === 'undefined' ? null : localStorage);
+  /* Through `window`, never the bare global: Node 26 ships its own global
+     `localStorage` that prints an ExperimentalWarning the moment it is touched,
+     so `typeof localStorage` under `require` reached for it. In a browser
+     `window.localStorage` is the same object; the try covers a browser that
+     blocks storage and throws on the getter. */
+  const store = () => {
+    try { return (typeof window !== 'undefined' && window.localStorage) || null; } catch { return null; }
+  };
 
   const sortState = () => {
     let saved = {};

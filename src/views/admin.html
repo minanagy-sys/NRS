@@ -49,6 +49,7 @@
   <div id="periodsList"></div>
   <div id="editor"></div>
   <div id="import"></div>
+  <div id="plan"></div>
 </div>
 
 <div class="panel" id="commission"></div>
@@ -65,9 +66,19 @@
 
 <div class="panel" id="audit"></div>
 
+<!-- The shared $/fmt/pc/esc, loaded before anything that uses them. -->
+<script src="/assets/fmt.js"></script>
 <script src="/assets/shell.js"></script>
 <script src="/assets/nav.js"></script>
 <script src="/assets/draft.js"></script>
+<script src="/assets/tg-fmt.js"></script>
+<script src="/assets/admin-plan.js"></script>
+<script src="/assets/admin-v32.js"></script>
+<!-- The phone extension map: its own module, and it needs cc-fmt for esc/fmt. -->
+<script src="/assets/cc-fmt.js"></script>
+<script src="/assets/admin-ext.js"></script>
+<!-- The weekly UCM export: the upload that opens the Contact Centre report. -->
+<script src="/assets/admin-ucm.js"></script>
 <script src="/assets/admin.js"></script>
 </body>
 </html>

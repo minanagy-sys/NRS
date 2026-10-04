@@ -36,7 +36,9 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
   });
 
   /* The pages too — a signed-in navigation must return the report, not signin. */
-  for (const u of ['/', '/targets', '/commercial', '/commercial-sales', '/marketing', '/contact-centre', '/doctors', '/inventory', '/procurement', '/admin']) {
+  /* Every live report. `/commission` was missing until 2026-10-04 — the page
+     shipped and was never loaded here. */
+  for (const u of ['/', '/targets', '/commission', '/commercial', '/commercial-sales', '/marketing', '/contact-centre', '/doctors', '/inventory', '/procurement', '/admin']) {
     const res = await app.inject({ method: 'GET', url: u });
     const title = (res.payload.match(/<title>([^<]*)<\/title>/) || [])[1] || '(none)';
     const tabs = (res.payload.match(/data-panel="/g) || []).length;
@@ -59,18 +61,39 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
     '/api/marketing?from=2026-08-01&to=2026-08-19',
     '/api/marketing?from=2025-06-01&to=2026-09-04',
     '/api/marketing?from=2026-08-01&to=2026-08-19&scope=ZAT',
-    /* Report 02, three ways: the pack's window, a range the PBX seed does not
-       reach at all (where the phone half must refuse rather than answer zero),
-       and one entity scope. */
+    /* Report 02, four ways. It answers from three frozen snapshots with
+       different windows, so each of these exercises a different combination:
+       the PBX pack's window (phones full, CRM absent), the CRM window (the
+       reverse), a range NEITHER reaches (every panel must refuse rather than
+       answer zero), and one entity scope. */
     '/api/contact-centre?from=2026-08-01&to=2026-08-19',
-    '/api/contact-centre?from=2026-09-01&to=2026-09-04',
+    '/api/contact-centre?from=2026-09-01&to=2026-10-10',
+    '/api/contact-centre?from=2025-01-01&to=2025-01-31',
     '/api/contact-centre?from=2026-08-01&to=2026-08-19&scope=ZAT',
+    /* The extension map — what turns a call into a person. */
+    '/api/pbx/extensions',
+    /* What the weekly lock is waiting for. Always 200, locked or not. */
+    '/api/contact-centre/gate',
     /* The uploads tab reads this to show what is held and what has been loaded. */
     '/api/uploads',
     /* The schemes behind every payslip, and the doctors on them. Admin draws
        three sections from this one answer; a 404 here is a Commission tab that
        renders its "could not load" branch and looks merely empty. */
     '/api/schemes',
+    /* The plan: 2027 targets, the v3.2 pool grid and the frozen history. The
+       Admin editor and the plan panels both read it, and it is the one endpoint
+       with an ETag — a 500 here is a Periods tab that renders half. */
+    '/api/targets-plan',
+    /* The v3.2 policy the Commission tab edits. A 500 here is an Admin tab that
+       renders its "could not load" branch and looks merely empty. */
+    '/api/policy/v32',
+    /* The Live panel and its lazy breakdown. The collected figure here must
+       equal the Commission report's net collection — the audit asserts it. */
+    '/api/targets-live?from=2026-08-01&to=2026-08-31',
+    '/api/targets-live-branch?name=CFC&from=2026-08-01&to=2026-08-31',
+    '/api/targets-actuals?year=2026',
+    /* What everyone earns, on the v3.2 pool grid. */
+    '/api/commission-month?from=2026-08-01&to=2026-08-31',
     /* Doctors Performance, two ways: a month with a target sheet and one
        without, since the targets tab takes a different path for each. */
     '/api/doctors?from=2026-08-01&to=2026-08-31',
@@ -94,6 +117,21 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
         note = j.error ? `error: ${j.error}` : `${(res.payload.length / 1024).toFixed(0)} KB · keys: ${Object.keys(j).slice(0, 6).join(',')}`;
         if (j.error) bad++;
       } catch (e) { note = `unparseable: ${e.message}`; bad++; }
+    } else if (res.statusCode === 423 && u.startsWith('/api/contact-centre?')) {
+      /* THE WEEKLY LOCK, working as designed: last week's UCM export is not in,
+         so report 02 is closed for everybody. A pass ONLY if it is a well-formed
+         lock — it names the week it is waiting for and carries NO figures. A
+         423 that leaks a payload, or one that cannot say which week, is a
+         failure. The audit checks the figures themselves with the lock off. */
+      let j = null;
+      try { j = res.json(); } catch { /* fall through to bad */ }
+      const leaks = j && ['summary', 'phones', 'crm', 'appointments'].some((k) => k in j);
+      if (j && j.locked && j.gate && j.gate.week && j.gate.week.from && !leaks) {
+        note = `locked — waiting for ${j.gate.week.from} → ${j.gate.week.to} (${j.gate.reason}); no figures sent`;
+      } else {
+        bad++;
+        note = `malformed lock: ${res.payload.slice(0, 200)}`;
+      }
     } else {
       bad++;
       note = res.payload.slice(0, 300);
@@ -117,11 +155,12 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
      --------------------------------------------------------------------- */
   const PORT = Number(process.env.PORT || 3020);
   const ROUTES = [
-    '/', '/commercial-sales', '/targets', '/commercial', '/marketing', '/contact-centre', '/doctors',
+    '/', '/commercial-sales', '/targets', '/commission', '/commercial', '/marketing', '/contact-centre', '/doctors',
     '/inventory', '/procurement',
     '/api/report', '/api/commercial-sales', '/api/targets-tracker', '/api/commercial-funnel',
     '/api/patients', '/api/marketing', '/api/contact-centre', '/api/uploads', '/api/doctors',
-    '/api/inventory', '/api/procurement', '/api/schemes',
+    '/api/inventory', '/api/procurement', '/api/schemes', '/api/targets-plan', '/api/policy/v32', '/api/targets-live', '/api/targets-actuals', '/api/commission-month',
+    '/api/pbx/extensions',
   ];
   let stale = 0, reachable = true;
   console.log(`  the running server on :${PORT}`);
@@ -149,7 +188,8 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
   }
   console.log('');
 
-  console.log(bad ? `\n  ${bad} endpoint(s) failed\n` : '\n  all endpoints answered 200 with a usable payload\n');
+  console.log(bad ? `\n  ${bad} endpoint(s) failed\n`
+    : '\n  all endpoints answered with a usable payload (report 02 may be legitimately locked — see above)\n');
   await app.close();
   await prisma.$disconnect();
   process.exit(bad ? 1 : 0);

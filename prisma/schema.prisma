@@ -1313,3 +1313,418 @@ model DoctorPayrollMonth {
   @@unique([period, doctorName])
   @@index([period])
 }
+
+/// ============================================================
+/// COMMISSION POLICY v3.2 — ALONGSIDE v2.8, NEVER INSTEAD OF IT.
+///
+/// v2.8 pays a branch from `CommissionTier`: fourteen revenue tiers, each
+/// holding a min and max PER ROLE, against three achievement bands.
+/// v3.2 pays the TEAM one pool, picked from a grid of fourteen revenue tiers by
+/// five achievement levels, then split by headcount and weight.
+///
+/// They are different generations of the same agreement, not a disagreement, so
+/// both are stored and `CommissionPolicyVersion.effectiveFrom` decides which
+/// applies to a month. A month already paid under v2.8 keeps the answer it was
+/// paid on — which is the entire reason that model exists.
+/// ============================================================
+
+/// The five achievement levels a branch can reach. Below the lowest, nothing.
+model CommissionLevel {
+  version   String
+  /// 80, 85, 90, 95, 100 — also the column this level reads in CommissionPool.
+  level     Int
+  /// Achievement at or above this share reaches the level. 0.8 is 80%.
+  fromPct   Decimal  @db.Decimal(6, 4)
+  updatedAt DateTime @updatedAt
+
+  @@id([version, level])
+}
+
+/// The pool grid: revenue picks the ROW, achievement picks the COLUMN.
+model CommissionPool {
+  version   String
+  tierNo    Int
+  revFrom   Decimal  @db.Decimal(14, 2)
+  /// null on the top tier only — "and above".
+  revTo     Decimal? @db.Decimal(14, 2)
+  /// Five figures in level order: [80, 85, 90, 95, 100]. A list rather than
+  /// five columns because the levels themselves are editable, and a schema that
+  /// hard-codes five of them cannot answer a policy with six.
+  pools     Json
+  updatedAt DateTime @updatedAt
+
+  @@id([version, tierNo])
+}
+
+/// v3.2 role weights — A DIFFERENT GRANULARITY FROM `CommissionRole`, which is
+/// why it is a table and not two columns on that one.
+///
+/// `CommissionRole` is five SEATS whose `sharePct` sums to 1.0: Branch Manager,
+/// Senior 1, Senior 2, Reception / Billing 1, Reception / Billing 2. v3.2 is
+/// four ROLE TYPES with a headcount each — manager 1 at weight 3, reception 2
+/// at 2, senior 2 at 2, nurse/office 2 at 0.5 — seven people, including a nurse
+/// role v2.8 has no seat for at all. A person earns pool x weight / sum(people
+/// x weight).
+///
+/// Writing `people` and `weight` onto the seat rows looked obvious and was
+/// wrong: three of the four names match no seat, and the two that do would have
+/// been counted twice.
+model CommissionRoleWeight {
+  version   String
+  role      String
+  people    Int
+  weight    Decimal  @db.Decimal(6, 2)
+  notes     String?
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([version, role])
+}
+
+/// Who is actually in a branch team. Without this, a staff payslip can only say
+/// "Reception 1" — the share is right and nobody can be paid from it.
+model CommissionStaff {
+  id        Int      @id @default(autoincrement())
+  branchId  Int
+  role      String
+  name      String
+  payMethod String?
+  bankAcc   String?
+  active    Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchId, role, name])
+  @@index([branchId])
+}
+
+/// The approved doctor target plan, 2026-07 to 2027-12.
+///
+/// NOT `DoctorTarget`, which belongs to a published monthly sheet with its own
+/// draft, reconcile and publish semantics. This is a multi-year plan: one
+/// figure per doctor per month, edited as a grid, with no month-close ceremony
+/// around it.
+model DoctorPlanMonth {
+  doctorName String
+  /// "2027-03"
+  period     String
+  /// Injectables | Laser + Injection | Laser-led | Nutrition | Therapist
+  groupName  String?
+  target     Decimal  @db.Decimal(14, 2)
+  updatedAt  DateTime @updatedAt
+
+  @@id([doctorName, period])
+  @@index([period])
+}
+
+/// Monthly actuals for 2024 and 2025 — history the Odoo cache does not hold.
+///
+/// The sync reaches back to 2026-01 and no further, so every figure before that
+/// exists only in the journal exports the plan file was built from. Seeded
+/// once, never recomputed, and labelled frozen wherever it is drawn: a restated
+/// 2025 figure will not update here, and pretending otherwise would be worse
+/// than saying so.
+model HistoryMonth {
+  /// "2024-01"
+  period String
+  /// branch | group | product — which cut of the month this row is.
+  kind   String
+  name   String
+  ex     Decimal @db.Decimal(14, 2)
+  source String  @default("seed")
+
+  @@id([period, kind, name])
+  @@index([period])
+}
+
+/**
+ * ============================================================
+ * REPORT 02 v2 — the contact centre as people rather than extensions.
+ * The old report could say 2,456 calls were answered and could not say by whom:
+ * five shared Odoo logins stand between 67 real people and every record they
+ * touch. These tables carry the frozen October snapshot that can, because it
+ * reads the `Employee:` line out of the first "Record created" chatter message
+ * instead of trusting `create_uid`.
+ * ALL OF IT IS `seed`. Nothing here is synced; it was decoded once from
+ * `Contact Centre · Nouvelage.html` (snapshot 2026-10-03 18:15) by
+ * scripts/import-contact-centre-html.js. The `source` column exists so a live
+ * sync can one day land beside the seed and win per grain, exactly as
+ * preferUpload() already does for the PBX tables — not because anything writes
+ * another value today.
+ * THE SNAPSHOT CANNOT ANSWER EVERYTHING, and the gaps are structural rather
+ * than empty. CcLead carries no source or campaign; CcActivity.personId and
+ * CcRebooking.personId are -1 on every row; CcOpportunity.team is 1 on every
+ * row. Those are recorded in the DataUpload notes and refused by name in the
+ * report, because a nullable column full of nulls reads as "nobody did this"
+ * when it means "this export did not carry it".
+ * ============================================================
+ */
+
+/// Every lookup array in the snapshot, flattened: the file index-compresses
+/// each record against a list of names, and the records are useless without it.
+///
+/// One table rather than fifteen because they are all (index -> string) and are
+/// only ever read by index. `kind` is the array's own name in the file —
+/// E B P D LG for the opportunity block, BR DOC PP CAT FAM for appointments,
+/// U PN Bs Ty OUT for CRM.
+model CcLookup {
+  kind   String
+  idx    Int
+  value  String
+  source String @default("seed")
+
+  @@id([kind, idx, source])
+  @@index([kind])
+}
+
+/// One contact-centre opportunity. DATA.R, decoded.
+///
+/// `showed` is a PATIENT match, not a status: the patient was found on some
+/// attended visit on or after this opportunity was created. It deliberately
+/// beats the appointment state, so a cancelled booking whose patient walked in
+/// anyway counts as showed — and `ownBooking` (the state really was attended)
+/// does not. The gap between the two is credit the agent lost.
+model CcOpportunity {
+  id         Int      @id @default(autoincrement())
+  date       DateTime @db.Date
+  hour       Int
+  /// -> CcLookup E
+  personIdx  Int
+  /// -> CcLookup B
+  branchIdx  Int
+  /// -> CcLookup P
+  deptIdx    Int
+  /// -> CcLookup D, from the first linked appointment
+  doctorIdx  Int
+  /// 0 no booking · 1 attended · 2 not closed · 3 cancelled · 4 upcoming.
+  /// no_show is bucketed as 2, not 3.
+  outcome    Int
+  showed     Boolean  @default(false)
+  ownBooking Boolean  @default(false)
+  /// EGP on the matched visits. Indicative: it is the patient's invoice total,
+  /// not this booking's.
+  revenue    Decimal  @default(0) @db.Decimal(14, 2)
+  /// 1 contact centre · 0 branch follow-up. 1 on every row in this snapshot.
+  team       Int      @default(1)
+  /// -> CcLookup LG
+  loginIdx   Int
+  /// SHA-256 of the last 10 digits of the phone, truncated to 12 hex. The only
+  /// join to the PBX side, and the only form the number is kept in.
+  phoneHash  String?
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([phoneHash])
+  @@index([personIdx])
+}
+
+/// One appointment. APPT.R, decoded.
+///
+/// Rescheduled rows are counted separately and excluded from every total — a
+/// reschedule is one booking that moved, and adding both halves double-counts
+/// the patient.
+model CcAppointment {
+  id             Int      @id @default(autoincrement())
+  date           DateTime @db.Date
+  /// Minutes from midnight. -1 when the appointment carries no slot (13 rows).
+  slotMinutes    Int
+  /// -> CcLookup BR
+  branchIdx      Int
+  /// -> CcLookup DOC
+  doctorIdx      Int
+  /// 0 showed · 1 confirmed · 2 pending · 3 cancelled · 4 rescheduled · 5 no_show · 6 other
+  stateCode      Int
+  /// 0 contact centre · 1 branch · 2 system. Never 2 in this snapshot.
+  sourceCode     Int
+  /// -> CcLookup PP — who booked it, from the PIN stamp on the chatter message
+  bookerIdx      Int
+  /// -> CcLookup FAM
+  familyIdx      Int
+  /// -> CcLookup CAT, the first service line
+  categoryIdx    Int
+  serviceLines   Int      @default(0)
+  /// 168 of 3,638. Either the branches are not confirming or they confirm and
+  /// do not record it; the report says both readings rather than picking.
+  hadConfirmCall Boolean  @default(false)
+  /// -> CcLookup PP, or -1
+  confirmByIdx   Int      @default(-1)
+  isReschedule   Boolean  @default(false)
+  isZat          Boolean  @default(false)
+  source         String   @default("seed")
+  loadedAt       DateTime @default(now())
+
+  @@index([date])
+  @@index([branchIdx])
+}
+
+/// One CRM opportunity across ALL logins — four times the contact-centre-only
+/// set, and the only place branch follow-up is visible at all. CRM.L, decoded.
+model CcLead {
+  id                  Int      @id @default(autoincrement())
+  date                DateTime @db.Date
+  hour                Int
+  /// -> CcLookup U — the shared Odoo login
+  loginIdx            Int
+  /// -> CcLookup Bs
+  branchIdx           Int
+  booked              Boolean  @default(false)
+  /// Opportunity created -> booking created. -1 when never booked (4,582 rows).
+  /// Reported as a MEDIAN: the tail runs to 41,426 minutes and a mean is a lie.
+  minutesToBooking    Int      @default(-1)
+  /// The same partner had a contact-centre opportunity in the previous 30 days.
+  /// Keyed on Odoo partner, not on phone.
+  duplicateOfCc       Boolean  @default(false)
+  /// -> CcLookup PN — the real person, from the chatter stamp
+  openerIdx           Int
+  /// employee_id disagrees with the person who created the record.
+  employeeOverwritten Boolean  @default(false)
+  source              String   @default("seed")
+  loadedAt            DateTime @default(now())
+
+  @@index([date])
+  @@index([loginIdx])
+}
+
+/// Activities logged on opportunities. CRM.A, decoded.
+///
+/// `personIdx` is -1 on all 3,190 rows in this snapshot, so the per-person
+/// breakdown is not computable and the report labels the table by LOGIN.
+model CcActivity {
+  id         Int      @id @default(autoincrement())
+  date       DateTime @db.Date
+  hour       Int
+  /// -> CcLookup Ty
+  typeIdx    Int
+  /// -> CcLookup U
+  loginIdx   Int
+  /// 0 open · 1 overdue · 2 done
+  state      Int
+  /// -> CcLookup OUT, or -1. Bucketed by first-match-wins substring matching
+  /// over mixed English, Arabic and Franco-Arabic. Guesswork, and labelled so.
+  outcomeIdx Int      @default(-1)
+  /// -> CcLookup Bs
+  branchIdx  Int
+  onCcOpp    Boolean  @default(false)
+  /// -> CcLookup PN, or -1. Always -1 here.
+  personIdx  Int      @default(-1)
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@index([date])
+}
+
+/// Who got the credit when a patient was re-booked. CRM.RB, decoded.
+///
+/// `credited` false means the patient attended on an appointment that was NOT
+/// one of the ones linked to the agent's opportunity — somebody else re-booked
+/// them and the original agent lost the booking.
+model CcRebooking {
+  id              Int      @id @default(autoincrement())
+  date            DateTime @db.Date
+  /// -> CcLookup Bs
+  leadBranchIdx   Int
+  /// -> CcLookup U, or -1 (always -1 on the 1,139 credited rows)
+  rebookLoginIdx  Int      @default(-1)
+  /// -> CcLookup Bs, or -1. -1 on exactly the 1,139 credited rows, for the
+  /// same reason rebookLoginIdx is: nobody re-booked them.
+  rebookBranchIdx Int      @default(-1)
+  credited        Boolean  @default(false)
+  /// -> CcLookup E
+  agentIdx        Int
+  team            Int      @default(1)
+  /// -> CcLookup PN, or -1. Always -1 here, so the report can only name a login.
+  personIdx       Int      @default(-1)
+  source          String   @default("seed")
+  loadedAt        DateTime @default(now())
+
+  @@index([date])
+}
+
+/// The HR directory the identity checks run against. CRM.EI, decoded.
+///
+/// `homeLogin` is the login this person is supposed to work under; using any
+/// other one is the cross-login finding on the Data quality panel.
+model CcEmployee {
+  name       String
+  department String   @default("")
+  jobTitle   String   @default("")
+  homeLogin  String   @default("")
+  /// Odoo user ids this person is allowed to act as.
+  allowedIds Int[]
+  active     Boolean  @default(true)
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@id([name, source])
+  @@index([department])
+}
+
+/// The phone extension map — the one table here that people edit.
+///
+/// It is why the agents table can print a name: PbxAgentDay.agentName is null
+/// on every row, and all eleven extensions that table holds are named here.
+/// Only 9 of the 61 carry an Odoo employee, so the Odoo column is blank for 52
+/// and the panel says which.
+model PbxExtension {
+  ext          String   @id
+  /// The name configured on the phone, e.g. "Fatma Nouvelage".
+  phoneName    String   @default("")
+  /// The matching hr.employee name, "" when nobody has mapped it.
+  odooEmployee String   @default("")
+  /// cc | branch | other
+  team         String   @default("other")
+  branch       String   @default("")
+  source       String   @default("seed")
+  updatedAt    DateTime @updatedAt
+
+  @@index([team])
+}
+
+/// One phone call, from the weekly Grandstream UCM CDR export.
+///
+/// WHY PER CALL AND NOT PER DAY. The weekly file is a raw CDR — one row per call
+/// LEG, several legs per call, grouped by session — and the existing PBX upload
+/// was built for aggregated queue/agent reports. Fed a CDR it read the columns,
+/// claimed the file fitted, and planned ZERO records. These rows are the calls
+/// the contact-centre page's own parser rebuilds from the legs; the day, queue,
+/// agent and hour roll-ups the report reads are derived from them on import.
+///
+/// AN UPLOAD REPLACES WHOLE WEEKS (Sunday–Saturday, Cairo), which is the rule
+/// the source page used: re-uploading a week swaps it, never adds to it.
+///
+/// THE WEEKLY LOCK READS THIS TABLE. The Contact Centre report locks every
+/// Sunday until last week is here, and opens again once its calls reach at least
+/// the Friday — see src/lib/cc-gate.js.
+///
+/// The phone number is never stored, only `phoneHash`: SHA-256 of its last ten
+/// digits, first 12 hex — the same form as CcOpportunity.phoneHash, so a call
+/// can be joined to an Odoo opportunity without either side holding the number.
+model PbxCall {
+  id        Int      @id @default(autoincrement())
+  /// The Sunday that starts this call's week.
+  weekStart DateTime @db.Date
+  date      DateTime @db.Date
+  hour      Int
+  /// 1 inbound · 2 outbound
+  direction Int
+  ext       String   @default("")
+  answered  Boolean  @default(false)
+  /// Queue entry to answer, in seconds. -1 when the CDR cannot say.
+  waitSec   Int      @default(-1)
+  talkSec   Int      @default(0)
+  phoneHash String?
+  queue     String   @default("")
+  /// grandstream: 0 answered · 1 rang in a queue, nobody answered · 5 out-of-hours
+  /// announcement · 6 ended in the IVR. generic: 0 answered · 1 no answer ·
+  /// 2 busy · 3 failed · 4 other. Read together with `format`.
+  status    Int
+  /// grandstream | generic — which parser built the row.
+  format    String   @default("grandstream")
+  source    String   @default("upload")
+  uploadId  Int?
+  loadedAt  DateTime @default(now())
+
+  @@index([weekStart])
+  @@index([date])
+  @@index([phoneHash])
+}

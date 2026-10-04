@@ -21,12 +21,9 @@
  * 1,254 / 1,268 new-patient splits the source reports disagree on.
  */
 
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '—'
-  : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
-const pc = (v, d = 1) => `${((Number(v) || 0) * 100).toFixed(d)}%`;
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/* From public/fmt.js — one copy of these for every page. They had drifted
+   apart by 2026-10-04 (two `pc`, two `esc`); see that file. */
+const { $, fmt, pc, esc } = Fmt;
 
 let DATA = null;
 let BASIS = 'report01';

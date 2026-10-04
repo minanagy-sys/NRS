@@ -7,10 +7,9 @@
    here shows that same sum live, and Publish stays disabled until it balances.
    ============================================================ */
 
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n)) ? '—'
-  : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* From public/fmt.js — one copy of these for every page. They had drifted
+   apart by 2026-10-04 (two `pc`, two `esc`); see that file. */
+const { $, fmt, escAll: esc } = Fmt;
 
 const api = async (url, opts = {}) => {
   const headers = { 'X-Requested-With': 'fetch', Accept: 'application/json', ...(opts.headers || {}) };
@@ -864,9 +863,34 @@ async function renderAudit() {
    with it rather than on a tab of their own. `mapping` and `data` hold two
    sections each for the same reason: the old strip made "Edit sheet" look like
    somewhere you go, when it is something you are already doing. */
+/* ---- the plan: branch and doctor targets through 2027 ----
+
+   The editor itself is `public/admin-plan.js`, which owns its own dirty map and
+   binds directly to its nodes. This hands it the three things it must not
+   rebuild: the fetch wrapper that redirects on a 401, a reload, and the two
+   message helpers every other panel on this page uses. */
+
+async function renderPlan() {
+  try {
+    await AdminPlan.render($('plan'), {
+      api,
+      doc: document,
+      reload: async () => { await renderPlan(); },
+      ok: (msg) => { $('err').innerHTML = `<span style="color:#9fe08a">${esc(msg)}</span>`; },
+      fail,
+    });
+  } catch (e) {
+    /* A plan that will not load must not take the Periods tab down with it —
+       the target sheet editor above is the thing people come here for. */
+    $('plan').innerHTML = `<section><h3 class="subtitle">The plan</h3>
+      <div class="tg-note" style="border-left:3px solid #b0503c">Could not load the plan:
+      ${esc(e.message)}</div></section>`;
+  }
+}
+
 const LOADERS = {
   status: renderStatus,
-  periods: async () => { await renderPeriods(); renderEditor(); renderImport(); },
+  periods: async () => { await renderPeriods(); renderEditor(); renderImport(); await renderPlan(); },
   mapping: async () => { await renderAliases(); },
   audit: renderAudit,
 };
@@ -939,6 +963,20 @@ Shell.stickyBar();
     $('who').textContent = me.name || me.subject;
   } catch { /* the redirect already happened */ }
   try { await renderStatus(); } catch (e) { fail(e); }
+
+  /* `/admin#uploads` — where the Contact Centre lock screen sends the person who
+     can upload. Uploads is a section of the Data tab, not a tab of its own, so
+     this opens Data, loads it, and scrolls the uploads into view. Without it
+     the button lands on Status and the reader has to know where to look, on
+     the one day of the week the report is closed until they find it. */
+  if ((location.hash || '').replace('#', '') === 'uploads') {
+    try {
+      go('data');
+      await LOADERS.data();
+      const up = $('uploads');
+      if (up && up.scrollIntoView) up.scrollIntoView({ block: 'start' });
+    } catch (e) { fail(e); }
+  }
 
   /* "Review in admin" on the report's Import dialog hands the draft over here
      rather than publishing it, so the careful path stays one click away. */
@@ -1252,8 +1290,39 @@ function drawCommission() {
 
   h += '</section>';
 
+  /* The v3.2 editor lands in this placeholder, BELOW everything above it —
+     `drawCommission` writes the panel wholesale, so anything composed into it
+     beforehand would be wiped on the next redraw. `renderV32()` fills it. */
+  h += '<div id="v32"></div>';
+
   $('commission').innerHTML = h;
   wireCommission();
+  renderV32();
+}
+
+/* ---- the v3.2 policy editor ----
+   Its own module for the same reason the plan grid is: `public/admin.js` is
+   already past 2,100 lines. It is handed the four things it must not rebuild —
+   the fetch wrapper with its 401 rule, a reload, and the two message helpers. */
+
+async function renderV32() {
+  const el = $('v32');
+  if (!el) return;
+  try {
+    await AdminV32.render(el, {
+      api,
+      doc: document,
+      reload: async () => { await renderCommissionAdmin(); },
+      ok: (msg) => { $('err').innerHTML = `<span style="color:#9fe08a">${esc(msg)}</span>`; },
+      fail,
+    });
+  } catch (e) {
+    /* A policy that will not load must not take the rest of the tab with it —
+       the branch grid and the schemes above are what people come here for. */
+    el.innerHTML = `<h3 class="subtitle">Commission policy v3.2</h3>
+      <div class="tg-note" style="border-left:3px solid #b0503c">Could not load the v3.2 policy:
+      ${esc(e.message)}</div>`;
+  }
 }
 
 /* ============================================================
@@ -1307,9 +1376,9 @@ function drawSchemes() {
         <table class="ltab tight" style="margin-top:10px"><thead><tr>
           <th>Revenue from</th><th>to</th><th class="n">Rate %</th></tr></thead><tbody>
           ${sc.bands.length ? sc.bands.map((b, i) => `<tr>
-            <td><input class="editable" style="width:110px" data-band="${sc.id}:${i}:from" value="${esc(String(b.from))}"></td>
-            <td><input class="editable" style="width:110px" data-band="${sc.id}:${i}:to" value="${b.to == null ? '' : esc(String(b.to))}" placeholder="and above"></td>
-            <td class="n"><input class="editable n" style="width:80px" data-band="${sc.id}:${i}:rate" value="${esc((b.rate * 100).toFixed(2))}"></td>
+            <td><input class="editable" style="width:110px" data-schband="${sc.id}:${i}:from" value="${esc(String(b.from))}"></td>
+            <td><input class="editable" style="width:110px" data-schband="${sc.id}:${i}:to" value="${b.to == null ? '' : esc(String(b.to))}" placeholder="and above"></td>
+            <td class="n"><input class="editable n" style="width:80px" data-schband="${sc.id}:${i}:rate" value="${esc((b.rate * 100).toFixed(2))}"></td>
           </tr>`).join('') : `<tr><td colspan="3"><span class="sm2">No bands are stated, so no rate is assumed —
             this scheme's commission has to be entered by hand.</span></td></tr>`}
           <tr>
@@ -1575,8 +1644,8 @@ function wireCommission() {
      in, and is ignored if it is not. */
   const gatherBands = (id) => {
     const rows = new Map();
-    P.querySelectorAll(`[data-band^="${id}:"]`).forEach((c) => {
-      const [, i, field] = c.dataset.band.split(':');
+    P.querySelectorAll(`[data-schband^="${id}:"]`).forEach((c) => {
+      const [, i, field] = c.dataset.schband.split(':');
       if (!rows.has(i)) rows.set(i, {});
       rows.get(i)[field] = c.value;
     });
@@ -1586,8 +1655,14 @@ function wireCommission() {
     if (String(nb.rate || '').trim() !== '') list.push(nb);
     return list;
   };
-  P.querySelectorAll('[data-band],[data-newband]').forEach((el) => el.addEventListener('input', () => {
-    const id = (el.dataset.band || el.dataset.newband).split(':')[0];
+  /* `data-schband`, not `data-band`. BOTH SECTIONS USED `data-band` — the
+     per-month band overrides above (`branchId:month:floorPct`) and these scheme
+     bands (`schemeId:index:from`) — and both handlers bound to the bare
+     selector. So typing a scheme's rate also wrote `{branchId: NaN, month: NaN}`
+     into the TARGETS dirty map, and the next "Save the targets" would post it.
+     Renaming one of them is the whole fix. */
+  P.querySelectorAll('[data-schband],[data-newband]').forEach((el) => el.addEventListener('input', () => {
+    const id = (el.dataset.schband || el.dataset.newband).split(':')[0];
     const prev = COM_DIRTY.schemes.get(id) || { id: Number(id) };
     comMark(el, COM_DIRTY.schemes, id, { ...prev, bands: gatherBands(id) });
   }));
@@ -1810,6 +1885,7 @@ async function renderUploads() {
     : '<span style="color:var(--muted)">nothing loaded</span>');
 
   let h = `<section>
+    <div id="ucmweekly"></div>
     <h3 class="subtitle" style="margin-top:26px">Bring a file in</h3>
     <p class="sub">Each of these fills a section of a report that currently shows an absence with a
       reason. Uploading one flips its provenance from <em>seed</em> to <em>upload</em> and the
@@ -1887,8 +1963,51 @@ async function renderUploads() {
     </tbody></table></div>`;
   }
 
-  h += '</section>';
+  /* The weekly UCM export goes FIRST in this panel: it is the upload that
+     decides whether the Contact Centre report is open at all this week. */
+  const ucmBox = document.getElementById('ucmweekly');
+  if (ucmBox) {
+    try {
+      const gate = await api('/api/contact-centre/gate');
+      AdminUcm.render(ucmBox, gate, {
+        api,
+        readBase64: (file) => new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(',')[1]);
+          r.onerror = () => rej(new Error('Could not read that file.'));
+          r.readAsDataURL(file);
+        }),
+        reload: () => renderUploads(),
+      });
+    } catch (e) {
+      ucmBox.innerHTML = `<div class="tg-note" style="border-left:3px solid #b0503c">
+        <strong>The weekly UCM upload could not be loaded.</strong> ${esc(e.message)}</div>`;
+    }
+  }
+
+  /* The extension map renders into its own container inside this panel — the
+     same shape as the plan editor on Periods. Its own module for the same
+     reason: a section bound through `document` cannot be fired by the test
+     harness, and this one decides whose name appears against every call. */
+  h += '<div id="extmap"></div></section>';
   $('uploads').innerHTML = h;
+
+  try {
+    const extData = await api('/api/pbx/extensions');
+    AdminExt.render($('extmap'), extData, {
+      api,
+      data: () => extData,
+      reload: () => renderUploads(),
+    });
+  } catch (e) {
+    /* Named rather than silent: an empty space where the map should be reads
+       as "there is no map". */
+    const box = $('extmap');
+    if (box) {
+      box.innerHTML = `<div class="tg-note" style="border-left:3px solid #b0503c">
+        <strong>The phone extension map could not be loaded.</strong> ${esc(e.message)}</div>`;
+    }
+  }
 
   /* Delegated, because the cards are rebuilt on every load and the CSP forbids
      inline handlers. */

@@ -90,3 +90,10 @@
 .sev.HIGH{background:rgba(201,138,46,.16);color:#a06a1c}
 .sev.MEDIUM{background:var(--espresso-soft);color:var(--espresso)}
 .sev.LOW{background:var(--cream);color:var(--muted)}
+
+/* `.status` and `.cp-desc` were emitted by three panels and styled by nothing —
+   a dirty-change readout and a section's explanatory line, both rendering as
+   bare text. The CSS-coverage check in the suite only sweeps Inventory and
+   Procurement, which is how they went unnoticed. */
+.status{font-size:11.5px;color:var(--muted);margin:2px 0 12px}
+.cp-desc{font-size:12.5px;color:var(--muted);margin:-4px 0 12px;max-width:80ch;line-height:1.55}

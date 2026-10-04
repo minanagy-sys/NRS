@@ -45,25 +45,51 @@ const cleanup = async () => {
 
   console.log('\nthe workbook, as imported');
   const g = await C.targetGrid(2026);
-  await eq('branches', g.branches.length, 11);
+  /* Twelve since 2026-10-04: Golden Square was added ahead of opening in April
+     2027. It has no 2026 cells, so it appears on the grid as a row of blanks to
+     be filled and contributes nothing to any 2026 figure — which the totals
+     below assert. */
+  await eq('branches', g.branches.length, 12);
   await eq('branch-months', g.branches.reduce((s, b) => s + b.months.filter((m) => m.target !== null).length, 0), 132);
-  await eq('2026 target total', g.grandTotal, 245449932);
-  await eq('annual total from sheet 04', g.annualTotal, 245449732);
+  /* 245,449,932 until 2026-10-04, when the Q4 2026 plan was imported from
+     `Targets Q4 2026 – 2027 · Nouvelage.html` and 33 cells were revised with
+     Mina's agreement. The figure moved by +2,275,717; the annual total did NOT,
+     because `CommissionBranch.annualTarget` is a separately agreed number and
+     nobody revised it. The gap that creates is asserted below rather than
+     smoothed over. */
+  await eq('2026 target total, after the Q4 revision', g.grandTotal, 247725649);
+  await eq('annual total, rolled forward to match the months', g.annualTotal, 247725649);
   await eq('Nouvel Age branches', g.entities.find((e) => e.entity === 'Nouvel Age').branches, 9);
-  await eq('ZAT branches', g.entities.find((e) => e.entity === 'ZAT').branches, 2);
+  await eq('ZAT branches', g.entities.find((e) => e.entity === 'ZAT').branches, 3);
   await eq('areas', Object.keys(g.areas).length, 4);
   await eq('August, all 11 branches', g.monthTotals[7], 23622679);
   await eq('departments', g.departments.length, 5);
 
-  /* The workbook disagrees with itself here and the resolution is Finance's, so
-     the gap is carried and surfaced rather than reconciled away. If this ever
-     goes to zero somebody has silently "corrected" the source. */
-  await check('CampShizar still carries its +200 annual gap', () => {
-    const b = g.branches.find((x) => x.name === 'CampShizar');
-    assert.strictEqual(Math.round(b.annualGap), 200, 'sheet 16 q9 — do not reconcile this away without Finance');
-  });
-  await check('and it is the only branch with a gap', () => {
-    assert.deepStrictEqual(g.branches.filter((b) => b.annualGap).map((b) => b.name), ['CampShizar']);
+  /* ---- THE ANNUALS AND THE MONTHS AGREE, AND MUST KEEP AGREEING ----
+
+     This assertion has had three lives, and the history is the point.
+
+     Originally it pinned CampShizar's +200 annual gap — a workbook
+     self-contradiction, carried rather than reconciled because the resolution
+     was Finance's, with the note "do not reconcile this away".
+
+     Importing the revised Q4 2026 plan moved 33 monthly cells and left every
+     annual where it was, so the gap became eleven branches and 2,275,917.
+
+     On 2026-10-04 Mina took the decision: the annual is a roll-up of the
+     months, `scripts/sync-annual-targets.js` rolled them forward, and the +200
+     went with them. That retires a guard, so the guard is REPLACED rather than
+     deleted — pinned at zero. If anybody edits months without the annuals
+     again, or an annual by hand, this fails on the next run and says by how
+     much. A test that tolerated any gap would have nothing left to say. */
+  await check('the annuals and the months agree, on every branch', () => {
+    const drift = g.branches
+      .filter((b) => Math.round(b.annualGap))
+      .map((b) => `${b.name} ${Math.round(b.annualGap)}`);
+    assert.deepStrictEqual(drift, [],
+      'roll them forward with scripts/sync-annual-targets.js, or fix the months '
+      + '— but do not let the two figures for one year drift apart unnoticed');
+    assert.strictEqual(Math.round(g.grandTotal - g.annualTotal), 0);
   });
 
   console.log('\nthe policy constants');
@@ -164,12 +190,15 @@ const cleanup = async () => {
     const created = await prisma.commissionBranch.create({
       data: { name: TEST_BRANCH, area: 'Cairo', entity: 'ZAT', annualTarget: '1200000.00', sortOrder: 99 },
     });
+    /* 13 and 4, not 12 and 3: the stored set became twelve branches and three
+       ZAT ones when Golden Square was added ahead of opening. The assertion is
+       about the DELTA this test creates, so it moves with the baseline. */
     let grid = await C.targetGrid(2026);
-    assert.strictEqual(grid.branches.length, 12, 'a new branch did not appear');
-    assert.strictEqual(grid.entities.find((e) => e.entity === 'ZAT').branches, 3);
+    assert.strictEqual(grid.branches.length, 13, 'a new branch did not appear');
+    assert.strictEqual(grid.entities.find((e) => e.entity === 'ZAT').branches, 4);
     await prisma.commissionBranch.update({ where: { id: created.id }, data: { entity: 'Nouvel Age' } });
     grid = await C.targetGrid(2026);
-    assert.strictEqual(grid.entities.find((e) => e.entity === 'ZAT').branches, 2, 'the entity change did not take');
+    assert.strictEqual(grid.entities.find((e) => e.entity === 'ZAT').branches, 3, 'the entity change did not take');
     /* Retiring must not delete: the cascade would take its whole target history. */
     await prisma.commissionTarget.create({ data: { branchId: created.id, year: 2026, month: 1, target: '100000.00' } });
     await prisma.commissionBranch.update({ where: { id: created.id }, data: { active: false } });
@@ -197,7 +226,7 @@ const cleanup = async () => {
   const total = await prisma.commissionTarget.aggregate({ _sum: { target: true }, where: { year: 2026 } });
   await eq('the test branch is gone', left, 0);
   await eq('no band overrides left set', overrides, 0);
-  await eq('the 2026 total is untouched', Number(total._sum.target), 245449932);
+  await eq('the 2026 total is untouched by these edits', Number(total._sum.target), 247725649);
 
   console.log(failures ? `\n✗ ${failures} failed\n` : '\n✓ the commission policy reads back exactly as imported, and stays editable\n');
   await prisma.$disconnect();

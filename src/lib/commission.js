@@ -207,7 +207,19 @@ async function monthView(year, month, actuals = [], opts = {}) {
   for (const b of branches) {
     if (!b.active) continue;
     const t = targetOf.get(b.id) || null;
-    const target = t ? d(t.target) : null;
+    /* ---- A BRANCH WITH NO TARGET FOR THIS MONTH IS NOT SCORED ----
+       Golden Square was added in October 2026 with a plan that starts in April
+       2027. Scored anyway it appeared as a twelfth branch at 0% in every 2026
+       month, and — worse — landed in `unmatched`, which the Commission report
+       shows as "1 branch unmatched" in red. It is not unmatched; it has nothing
+       to match yet. It does not drag the totals (they sum targets, and its is
+       zero) but it does raise a false alarm and inflate every per-branch count.
+
+       A branch that has no row in `CommissionTarget` for the month is skipped
+       entirely. One that has a row of zero is a deliberate zero and is still
+       scored, which is the distinction the plan editor keeps. */
+    if (!t) continue;
+    const target = d(t.target);
     const bands = R.bandsFor(t || {}, policy.bands);
 
     /* direct hit, then alias, then nothing */

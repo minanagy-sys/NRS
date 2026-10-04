@@ -46,12 +46,21 @@ const RANGES = [
   { label: 'a quarter', from: '2026-07-01', to: '2026-09-03' },
   { label: 'year to date', from: '2026-01-01', to: '2026-09-03' },
   { label: 'pre-cutover only', from: '2026-03-01', to: '2026-05-31' },
-  { label: 'a month with no data at all', from: '2026-11-01', to: '2026-11-30' },
+  /* Renamed 2026-10-04: November is no longer empty. The appointment sync now
+     reaches 45 days ahead, so this window holds bookings that have not happened
+     yet and no revenue at all — which is a more interesting shape to test than
+     emptiness, and the reason the show-rate check above needed loosening. */
+  { label: 'a month entirely in the future', from: '2026-11-01', to: '2026-11-30' },
   { label: 'one day with no data', from: '2026-12-25', to: '2026-12-25' },
 ];
 
 (async () => {
-  const app = await build();
+  /* The weekly Contact Centre lock is OFF here, and only here. The audit checks
+     that figures are right, not who may see them; with the lock on, any Sunday
+     before the upload would fail sixteen pinned report 02 figures for a reason
+     unrelated to whether they are correct. It is an in-process option — no
+     request and no .env can set it. The smoke test keeps the lock ON. */
+  const app = await build({ contactCentreGate: false });
   app.log.level = 'silent';
   app.addHook('preHandler', async (req) => {
     if (!req.user) req.user = { subject: 'audit', email: 'audit@local' };
@@ -181,8 +190,20 @@ const RANGES = [
         F.booked === 0 ? F.showRate === 0 : near(F.showRate, F.totals.attended / F.booked, 1e-9),
         `showRate ${F.showRate} on ${F.booked} bookings`);
       if (F.totals.open) {
-        ok('the resolved-only rate is higher than the all-bookings rate',
-          F.showRateResolved > F.showRate);
+        /* Open bookings only ever drag the all-bookings rate DOWN, so the
+           resolved-only rate is the higher of the two — EXCEPT in a window
+           where nothing has resolved yet, where both are 0 and the
+           relationship is equality.
+
+           A strict `>` was right until the appointment cache started syncing
+           45 days ahead (2026-10-04). November is now 117 bookings, every one
+           of them open and none attended, so the old assertion failed on a
+           month of pure future bookings — a correct report, a wrong test. */
+        const resolved = F.booked - F.totals.open;
+        ok('the resolved-only rate is at least the all-bookings rate',
+          resolved === 0 ? F.showRateResolved === F.showRate : F.showRateResolved >= F.showRate,
+          `resolved ${F.showRateResolved} vs all ${F.showRate} on ${resolved} resolved `
+          + `of ${F.booked} booked`);
       }
     }
     if (cf.patientFunnel && cf.patientFunnel.total) {
@@ -514,6 +535,17 @@ const RANGES = [
     !!(cc3 && cc3.phones), `status ${cc3 && cc3.__status}`);
   const C2 = (cc3 && cc3.phones) ? cc3
     : { phones: {}, outbound: {}, queues: {}, hours: { outOfHours: {} }, bookings: { contactCentre: {} } };
+  /* THE SAME REPORT, A DIFFERENT WINDOW. The phones are 1–18 August and the
+     contact-centre snapshot is September into October; one fetch cannot pin
+     both, and asking the August range for September figures would pin a
+     refusal rather than a number. */
+  const ccS = await get('/api/contact-centre?from=2026-09-01&to=2026-10-10');
+  ok('report 02 answered for the contact-centre window',
+    !!(ccS && ccS.summary && ccS.summary.totals), `status ${ccS && ccS.__status}`);
+  const EMPTY_CS = {
+    summary: { totals: {} }, crm: { totals: {} }, appointments: { totals: {} },
+  };
+  const CS = (ccS && ccS.summary && ccS.summary.totals) ? ccS : EMPTY_CS;
   /* A refused request must fail as a named check rather than as a TypeError
      thirty lines later — which is exactly how this first went wrong: the rate
      limiter returned a 429 and the audit died reading `.spend` of undefined,
@@ -737,6 +769,39 @@ const RANGES = [
     }
   }
 
+  /* ---- H. the Live panel against the Commission report ----
+
+     THE IDENTITY THAT DECIDES WHETHER THE SPLIT WAS SAFE. `/targets` and
+     `/commission` are two pages now, and the first thing two pages do is
+     disagree. Both report the same month's cash: Live calls it "collected
+     ex-VAT", Commission calls it "net collection". They are the same money and
+     they come from the same call, so they must be equal to the piastre.
+
+     The first version of the Live panel read `Collection.net` raw and was
+     2,751,409 above Commission for August — exactly the VAT, which would have
+     read as a reconciliation problem rather than a unit error. */
+  {
+    const Live = require(`${ROOT}/src/lib/targets-live.js`);
+    const Trk = require(`${ROOT}/src/lib/target-tracker.js`);
+    for (const [from, to] of [
+      ['2026-08-01', '2026-08-31'],
+      ['2026-10-01', '2026-10-04'],
+      ['2026-07-01', '2026-09-30'],
+    ]) {
+      const [lv, tr] = await Promise.all([
+        Live.build({ from, to }), Trk.buildTrackerRange({ from, to }),
+      ]);
+      ok(`Live collected equals Commission net collection · ${from} → ${to}`,
+        Math.abs(lv.totals.collected - tr.totals.net) < 1,
+        `Live ${f(lv.totals.collected)} vs Commission ${f(tr.totals.net)}`);
+      /* And a branch row cannot claim cash the whole does not have. */
+      const summed = lv.branches.reduce((a, b) => a + b.collected, 0);
+      ok('  and the branch rows sum to it, with nothing invented',
+        summed <= lv.totals.collected + 1,
+        `rows ${f(summed)} vs total ${f(lv.totals.collected)}`);
+    }
+  }
+
   const REF = [
     ['report 05 · August group target', 23622679, tt.totals.target, 0],
     ['report 05 · customer refunds', 20970, tt.totals.refunds, 0],
@@ -780,6 +845,24 @@ const RANGES = [
       C2.queues.entities ? C2.queues.entities.zat.offered : null, 0],
     ['report 02 · out-of-hours calls', 218, C2.hours.outOfHours.calls, 0],
     ['report 02 · call-centre bookings', 2100, C2.bookings.contactCentre.bookings, 5],
+    /* The contact-centre snapshot — a SECOND frozen window on the same report,
+       September rather than August, so these come from a second fetch.
+
+       `showed` is pinned at 1,435 and NOT at 1,576. The source page's own
+       aggregate skips opportunities that booked nothing before it tests the
+       show flag, so 141 patients who arrived through an opportunity that never
+       booked are outside it. The looser count is the easy mistake and it
+       overstates the contact centre by 141 patients and 687,548 EGP, so the
+       stricter one is the one with a tolerance of zero against it. */
+    ['report 02 · opportunities', 2955, CS.summary.totals.n, 0],
+    ['report 02 · opportunities booked', 2388, CS.summary.totals.booked, 0],
+    ['report 02 · booked and showed', 1435, CS.summary.totals.showed, 0],
+    ['report 02 · showed on own booking', 1139, CS.summary.totals.ownBooking, 0],
+    ['report 02 · credit lost', 296, CS.summary.totals.lostCredit, 0],
+    ['report 02 · CRM opportunities', 12386, CS.crm.totals.leads, 0],
+    ['report 02 · CRM booked', 7804, CS.crm.totals.booked, 0],
+    ['report 02 · appointments (excl. rescheduled)', 2844, CS.appointments.totals.n, 0],
+    ['report 02 · appointments rescheduled', 794, CS.appointments.totals.rescheduled, 0],
   ].filter((r) => r[2] !== null && r[2] !== undefined);
   for (const [what, want, got, tol] of REF) {
     const good = Math.abs(got - want) <= tol;

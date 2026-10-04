@@ -26,11 +26,9 @@
  * and transfers, and presenting it as movement would hide it.
  */
 
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '—'
-  : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/* From public/fmt.js — one copy of these for every page. They had drifted
+   apart by 2026-10-04 (two `pc`, two `esc`); see that file. */
+const { $, fmt, esc } = Fmt;
 
 let DATA = null;
 

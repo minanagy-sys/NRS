@@ -44,13 +44,27 @@ async function token() {
 
 (async () => {
   const today = iso(new Date());
-  const to = arg('to', today);
-  const from = arg('from', `${to.slice(0, 7)}-01`);
+  /* FORWARD BOOKINGS. `to` used to default to today, so the cache held nothing
+     after this morning — and a confirmation-call report is ENTIRELY about the
+     bookings that have not happened yet. Measured on 2026-10-04: the Appointment
+     table had 0 of the 670 bookings already made for 5–10 October, while every
+     past day reconciled exactly (325 = 325, 374 = 374, 400 = 400). The whole
+     gap was the future.
+     45 days matches the look-ahead the contact-centre snapshot itself uses when
+     it matches a patient to a visit. Pass --ahead 0 for the old behaviour. */
+  const ahead = Number(arg('ahead', 45));
+  if (!Number.isFinite(ahead) || ahead < 0 || ahead > 365) {
+    throw new Error('--ahead must be a whole number of days between 0 and 365.');
+  }
+  const horizon = iso(new Date(Date.now() + ahead * 86400000));
+  const to = arg('to', horizon);
+  const from = arg('from', `${today.slice(0, 7)}-01`);
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
   if (!isDate(from) || !isDate(to)) throw new Error('Dates must be YYYY-MM-DD.');
   if (from > to) throw new Error('"from" is after "to".');
 
   console.log(`\n\x1b[1mSyncing bookings · ${from} to ${to}\x1b[0m`);
+  if (to > today) console.log(`  including ${ahead} days ahead — bookings not yet due\n`);
   const out = await syncAppointments({ token: await token(), from, to });
 
   console.log(`\n  ${f(out.found)} bookings found · ${f(out.written)} rows written across ${out.branches} branches\n`);

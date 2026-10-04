@@ -21,13 +21,10 @@
  * is where report 01 keeps it.
  */
 
-const $ = (id) => document.getElementById(id);
-const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '—'
-  : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
+/* From public/fmt.js — one copy of these for every page. They had drifted
+   apart by 2026-10-04 (two `pc`, two `esc`); see that file. */
+const { $, fmt, pc, esc } = Fmt;
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
-const pc = (v, d = 1) => `${((Number(v) || 0) * 100).toFixed(d)}%`;
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 let DATA = null;
 let SCOPE = 'all';

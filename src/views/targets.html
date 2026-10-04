@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#58382C">
-<title>Targets &amp; Doctor Commission · Nouvelage</title>
+<title>Targets &amp; Plan · Nouvelage</title>
 <link rel="stylesheet" href="/assets/fonts/fonts.css">
 <link rel="stylesheet" href="/assets/app.css">
 </head>
@@ -21,46 +21,48 @@
 </div>
 
 <div class="header">
-  <div class="brand">NOUVELAGE · COMMISSION · ODOO 18</div>
-  <h1>Target tracker<em id="hPeriod"></em></h1>
-  <div class="header-sub" id="hSub">Net cash collected ex-VAT against monthly target, scored on the commission policy in force.</div>
-  <div class="hero-stats"><div class="hero-stat"><div class="lbl">Commission base</div><div class="val" id="hNet">—</div><div class="unit">EGP ex-VAT</div></div>
-    <div class="hero-stat"><div class="lbl">Pace</div><div class="val" id="hPace">—</div><div class="unit">vs pro-rata target</div></div>
-    <div class="hero-stat"><div class="lbl">Branches at the floor</div><div class="val" id="hQual">—</div><div class="unit" id="hQualU">on actual achievement</div></div>
-    <div class="hero-stat"><div class="lbl">Payable now</div><div class="val" id="hPool">—</div><div class="unit" id="hPoolU">EGP</div></div></div>
+  <div class="brand">NOUVELAGE · TARGETS · ODOO 18</div>
+  <h1>Targets &amp; Plan<em id="hPeriod"></em></h1>
+  <div class="header-sub" id="hSub">Cash collected and revenue billed, against the plan. Two bases, and they are not expected to agree.</div>
+  <div class="hero-stats"><div class="hero-stat"><div class="lbl">Collected</div><div class="val" id="hTarget">—</div><div class="unit" id="hTargetU">EGP ex-VAT · the commission base</div></div>
+    <div class="hero-stat"><div class="lbl">Billed</div><div class="val" id="hAch">—</div><div class="unit">EGP ex-VAT · ex-package</div></div>
+    <div class="hero-stat"><div class="lbl">Against plan</div><div class="val" id="hPace">—</div><div class="unit" id="hPaceU">collected vs planned</div></div>
+    <div class="hero-stat"><div class="lbl">Branches at the floor</div><div class="val" id="hDocs">—</div><div class="unit" id="hDocsU">of those with a plan</div></div></div>
 </div>
 
 <div class="rangeline" id="rangeline">Loading…</div>
 
 <div class="tabs-wrap"><div class="tabs">
-  <button class="tab active" data-panel="tva"><span class="tab-num">01</span> Target vs achieved</button>
-  <button class="tab" data-panel="doc"><span class="tab-num">02</span> Doctor targets</button>
-  <button class="tab" data-panel="br"><span class="tab-num">03</span> Branch targets</button>
-  <button class="tab" data-panel="com"><span class="tab-num">04</span> Doctor commission</button>
-  <button class="tab" data-panel="gates"><span class="tab-num">05</span> Management gates</button>
+  <button class="tab active" data-panel="wh"><span class="tab-num">01</span> Live</button>
+  <button class="tab" data-panel="ov"><span class="tab-num">02</span> Plan</button>
+  <button class="tab" data-panel="ac"><span class="tab-num">03</span> Actuals</button>
+  <button class="tab" data-panel="tb"><span class="tab-num">04</span> Branch targets</button>
+  <button class="tab" data-panel="ts"><span class="tab-num">05</span> Service targets</button>
+  <button class="tab" data-panel="doc"><span class="tab-num">06</span> Doctors</button>
 </div></div>
 
-<div class="panel active" id="tva"></div>
+<div class="panel active" id="wh"></div>
+<div class="panel" id="ov"></div>
+<div class="panel" id="ac"></div>
+<div class="panel" id="tb"></div>
+<div class="panel" id="ts"></div>
 <div class="panel" id="doc"></div>
-<div class="panel" id="br"></div>
-<div class="panel" id="com"></div>
-<div class="panel" id="gates"></div>
 
-<!-- The payslip modal. Same markup the NRS import dialog uses, so it inherits
-     the shell, the backdrop click and the Escape key without a second copy. -->
-<div class="sheet-dialog" id="dlg" hidden>
-  <div class="sheet-card payslip-card" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
-    <h3 id="dlgTitle"></h3>
-    <div id="dlgBody"></div>
-    <div class="sheet-actions" id="dlgActions"></div>
-  </div>
-</div>
-
+<!-- The shared $/fmt/pc/esc, loaded before anything that uses them. -->
+<script src="/assets/fmt.js"></script>
 <script src="/assets/shell.js"></script>
 <script src="/assets/nav.js"></script>
 <script src="/assets/cbar.js"></script>
 <script src="/assets/rules.js"></script>
+<script src="/assets/tg-fmt.js"></script>
 <script src="/assets/target-view.js"></script>
+<script src="/assets/chartlet.js"></script>
+<script src="/assets/tg-wh.js"></script>
+<script src="/assets/tg-ac.js"></script>
+<script src="/assets/tg-ov.js"></script>
+<script src="/assets/tg-tb.js"></script>
+<script src="/assets/tg-ts.js"></script>
+<script src="/assets/tg-dr.js"></script>
 <script src="/assets/targets.js"></script>
 </body>
 </html>

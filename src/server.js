@@ -23,7 +23,16 @@ const PORT = Number(process.env.PORT || 3020);
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || `http://localhost:${PORT}`;
 const IS_HTTPS = PUBLIC_ORIGIN.startsWith('https://');
 
-async function build() {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.contactCentreGate=true] The weekly lock on report 02.
+ *   ONLY settable in-process, never from a request or the environment: an env
+ *   switch could be left on in a droplet's .env and quietly unlock the report
+ *   for good. `scripts/audit.js` turns it off because it checks figures, not
+ *   access — a Sunday with no upload would otherwise fail sixteen pinned report
+ *   02 figures for a reason that has nothing to do with whether they are right.
+ */
+async function build({ contactCentreGate = true } = {}) {
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL || 'info', transport: undefined },
     trustProxy: true,
@@ -126,7 +135,7 @@ async function build() {
       data: { actor: req.user ? req.user.subject : null, action, detail: detail ? String(detail).slice(0, 500) : null, ip: req.ip },
     }).catch(() => {}));
 
-  app.decorate('config', { PUBLIC_ORIGIN, IS_HTTPS, PORT });
+  app.decorate('config', { PUBLIC_ORIGIN, IS_HTTPS, PORT, contactCentreGate });
 
   await app.register(require('./routes/auth.js'));
   await app.register(require('./routes/report.js'));

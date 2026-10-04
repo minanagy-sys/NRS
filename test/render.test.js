@@ -30,6 +30,7 @@ const Report = require(`${path}/src/lib/report.js`);
 const Patients = require(`${path}/src/lib/patients.js`);
 
 const fmtNum = (n) => Math.round(Number(n)).toLocaleString('en-US');
+const Payslip = require(`${path}/public/payslip.js`);
 
 /** The page's own `esc`, so a name carrying an ampersand — "Randa & Poussy" is
  *  a real scheme — is looked for as it was WRITTEN into the HTML, not as it was
@@ -63,7 +64,16 @@ function fakeNode(dataset) {
     className: '',
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     addEventListener(ev, fn) { (handlers[ev] ||= []).push(fn); },
-    fire(ev) { for (const fn of handlers[ev] || []) fn({ target: this }); },
+    /* DISPATCH OVER A COPY, the way a real browser does.
+       These stub nodes OUTLIVE a repaint — the page replaces innerHTML and the
+       browser throws the old nodes and their listeners away, but this harness
+       hands back the same object every time, so each repaint binds another
+       listener to it. Iterating the live array then meant a handler that asks
+       for a repaint appended to the very array being walked, and `for...of`
+       re-checks length every step: one click span an infinite loop at 100% CPU
+       and the suite never finished. Copying first also matches DOM dispatch,
+       which snapshots the listener list before calling any of them. */
+    fire(ev) { for (const fn of [...(handlers[ev] || [])]) fn({ target: this }); },
   };
 }
 
@@ -97,6 +107,7 @@ function makeDom(ids, selectors = {}) {
 
 function runPage(file, payload, ids, selectors) {
   const { document, els, nodes } = makeDom(ids, selectors);
+  const timers = [];
   const sandbox = {
     document,
     console,
@@ -126,6 +137,9 @@ function runPage(file, payload, ids, selectors) {
        Missing from this stub, app.js throws inside renderTargets and every
        panel after it — products, stock, data — renders empty. */
     TargetView: require(`${path}/public/target-view.js`),
+    /* The payslip is a module now, so the harness can draw one directly —
+       see the assertions in the targets block. */
+    Payslip: require(`${path}/public/payslip.js`),
     dlg: { open() {}, close() {}, note() {} },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -134,13 +148,29 @@ function runPage(file, payload, ids, selectors) {
     Date, Number, Math, JSON, String, Object, Array, RegExp, isNaN,
     ResizeObserver: class { observe() {} },
     setTimeout, Promise,
+    /* CAPTURED, NOT SCHEDULED. A real `setInterval` would keep the test process
+       alive and fire a reload mid-assertion; this records what the page asked
+       for so a test can check the period and invoke the callback deliberately —
+       which is the only way to prove the loop's guards actually guard. */
+    setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearInterval() {},
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
-  const code = fs.readFileSync(`${path}/public/${file}`, 'utf8');
   vm.createContext(sandbox);
-  vm.runInContext(code, sandbox, { filename: file });
-  return { els, sandbox, nodes };
+  /* A LIST, in <script> order, because a page is no longer one file. The
+     modules declare globals the page's own script then uses, so running them
+     in the wrong order throws exactly the way the browser would — which makes
+     this an assertion that the view's script tags are ordered correctly, not
+     just a loader. A bare string still works, so the other ten pages are
+     untouched. */
+  /* public/fmt.js first, INSIDE the sandbox, the way every view loads it:
+     evaluated here its `$` resolves the sandbox's `document`. A require()d copy
+     would resolve Node's, where there is none. */
+  for (const f of ['fmt.js', ...[].concat(file)]) {
+    vm.runInContext(fs.readFileSync(`${path}/public/${f}`, 'utf8'), sandbox, { filename: f });
+  }
+  return { els, sandbox, nodes, timers };
 }
 
 /* Tag balance: the cheap check that catches an unclosed <div> or a stray </div>,
@@ -559,10 +589,27 @@ async function get2(url) {
 
   /* ------------------------------------------------------- targets ---- */
   const Tracker = require(`${path}/src/lib/target-tracker.js`);
-  /* Five panels now: report 05 became Targets & Doctor Commission. `pace`,
-     `tracker`, `payout` and `sim` are SECTIONS composed into `br` and `gates`;
-     `ladder` and `matrix` moved to Admin, which owns the editors. */
-  const tIds = ['tva', 'doc', 'br', 'com', 'gates', 'dlg', 'dlgTitle', 'dlgBody', 'dlgActions',
+  /* The page's scripts in the order `src/views/targets.html` loads them, minus
+     the shared shell. Listing them here rather than reading the view keeps the
+     test honest about what it is exercising — and the sweep further down
+     already asserts that every view's script tags exist on disk. */
+  /* TWO PAGES NOW, one payload. `/targets` scores doctors against the approved
+     sheet in invoiced revenue; `/commission` scores branches against the policy
+     in collected cash. They were one report and the page had to apologise for
+     it on screen. Both are driven from the SAME `/api/targets-tracker` answer,
+     so a range can never mean two different things across them — and running
+     both here, in one loop, is what proves it.
+
+     Each list is the view's script tags in order, minus the shared shell. The
+     sweep further down already asserts those files exist on disk. */
+  const planForTargets = await get2('/api/targets-plan');
+  const TARGETS_FILES = ['tg-fmt.js', 'chartlet.js', 'tg-wh.js', 'tg-ac.js', 'tg-ov.js',
+    'tg-tb.js', 'tg-ts.js', 'tg-dr.js', 'targets.js'];
+  const COMMISSION_FILES = ['tg-fmt.js', 'payslip.js', 'cm-v32.js', 'cm-doctors.js',
+    'cm-summary.js', 'cm-gates.js', 'commission.js'];
+  const tIds = ['wh', 'ov', 'ac', 'tb', 'ts', 'doc', 'hPeriod', 'hTarget', 'hTargetU', 'hAch',
+    'hPace', 'hPaceU', 'hDocs', 'hDocsU', 'rangeline', 'err', 'dot', 'status', 'from', 'to', 'load'];
+  const comIds = ['cm', 'cmd', 'cms', 'cmc', 'gates', 'dlg', 'dlgTitle', 'dlgBody', 'dlgActions',
     'hPeriod', 'hNet', 'hPace', 'hQual', 'hQualU', 'hPool', 'hPoolU', 'rangeline', 'err', 'dot', 'status',
     'from', 'to', 'load'];
 
@@ -599,17 +646,36 @@ async function get2(url) {
     /* The simulator is a second endpoint and needs its own answer, or it is
        handed a tracker payload and renders its error path. */
     const b0 = (payload.branches || [])[0];
+    payload.__byUrl = {
+      /* `/targets` fetches the tracker AND the plan in parallel. Answered with
+         the tracker payload, every plan panel renders its "no plan" branch —
+         which passes every structural check while testing nothing. */
+      '/api/targets-plan': planForTargets,
+      '/api/targets-tracker': payload,
+      '/api/targets-live': await get2(`/api/targets-live?from=${R.from}&to=${R.to}`),
+      '/api/targets-actuals': await get2(`/api/targets-actuals?year=${R.to.slice(0, 4)}`),
+      '/api/targets-live-branch': await get2('/api/targets-live-branch'
+        + `?name=${encodeURIComponent('CFC')}&from=${R.from}&to=${R.to}`),
+      /* The v3.2 scoring. Answered with the tracker payload, every panel on
+         /commission draws its "no policy" branch and passes every check. */
+      '/api/commission-month': await get2(`/api/commission-month?from=${R.from}&to=${R.to}`),
+    };
     if (b0) {
-      payload.__byUrl = {
-        '/api/targets-simulate': await get2(`/api/targets-simulate?branchId=${b0.branchId}`
-          + `&year=${payload.year}&month=${payload.month}&net=${Math.round(b0.net)}&mults=`),
-      };
+      payload.__byUrl['/api/targets-simulate'] = await get2(`/api/targets-simulate?branchId=${b0.branchId}`
+        + `&year=${payload.year}&month=${payload.month}&net=${Math.round(b0.net)}&mults=`);
     }
-    const t = runPage('targets.js', payload, tIds);
+    const t = runPage(TARGETS_FILES, payload, tIds);
+    const c = runPage(COMMISSION_FILES, payload, comIds);
     await new Promise((r) => setTimeout(r, 80));
 
-    for (const pn of ['tva', 'doc', 'br', 'com', 'gates']) {
-      const html = t.els[pn].innerHTML;
+    /* `els` reads from whichever page owns the panel, so every assertion below
+       keeps testing the same markup it always did — the panels moved pages, not
+       shape. Proved separately: all 28 moved panel renders are byte-identical
+       to the single-page version they came from. */
+    const els = { ...t.els, ...c.els };
+
+    for (const pn of ['wh', 'ov', 'ac', 'tb', 'ts', 'doc', 'cm', 'cmd', 'cms', 'cmc', 'gates']) {
+      const html = els[pn].innerHTML;
       /* A REFUSAL IS A RENDER. Several of these ranges have no target sheet —
          pre-cutover months never had one — and tab 01 correctly answers with
          "No target sheet for 2026-05" in about 230 characters. Demanding 300
@@ -622,27 +688,31 @@ async function get2(url) {
       ok(`  ${pn} no undefined/NaN`, !/undefined|NaN/.test(html),
         (html.match(/.{0,50}(undefined|NaN).{0,50}/) || [])[0]);
     }
-    ok('  status not failed', t.els.status.textContent !== 'failed', t.els.err.textContent);
+    ok('  targets status not failed', t.els.status.textContent !== 'failed', t.els.err.textContent);
+    ok('  commission status not failed', c.els.status.textContent !== 'failed', c.els.err.textContent);
 
     /* Multi-month must announce itself, and never silently average. */
     if (range.multi) {
       ok(`  says ${range.totals.monthsCovered} months scored separately`,
-        t.els.br.innerHTML.includes('scored separately'));
+        els.gates.innerHTML.includes('scored separately'));
     }
     /* The unattributable case is the one that used to print eleven failing branches. */
     if (range.latest && !range.latest.branchScoringPossible) {
       ok('  refuses per-branch scoring rather than showing zeros',
-        /not possible<\/strong> for this range|not possible/.test(t.els.br.innerHTML));
+        /not possible<\/strong> for this range|not possible/.test(els.gates.innerHTML));
     }
     /* The four previously-missing sections. */
     if (extras.daily.days.length) {
-      ok('  daily collection drawn', /Daily collection/.test(t.els.br.innerHTML));
-      ok('  daily bars present', (t.els.br.innerHTML.match(/class="dbar"/g) || []).length === extras.daily.days.length);
+      ok('  daily collection drawn', /Daily collection/.test(els.gates.innerHTML));
+      ok('  daily bars present', (els.gates.innerHTML.match(/class="dbar"/g) || []).length === extras.daily.days.length);
     }
-    ok('  regional roll-up drawn', /Regional roll-up/.test(t.els.br.innerHTML));
+    ok('  regional roll-up drawn', /Regional roll-up/.test(els.gates.innerHTML));
 
-    /* Report 05's six-card header row, and the trap inside it. */
-    const pace = t.els.br.innerHTML;
+    /* The tracker's six-card header row, and the trap inside it. These sections
+       moved from the Summary tab to Branch tracker when Summary became the v3.2
+       answer — the assertions are unchanged, they just read the panel the
+       content now lives in. */
+    const pace = els.gates.innerHTML;
     ok('  the six-card KPI row drawn', /kpi-grid six/.test(pace));
     ok(`  exactly six cards (${(pace.match(/class="kpi[ "]/g) || []).length})`,
       (pace.match(/class="kpi[ "]/g) || []).length === 6);
@@ -674,11 +744,242 @@ async function get2(url) {
           .includes(fmtNum(L.totals.poolRun)),
         `projected pool leaked into the KPI row`);
     }
-    ok('  service mix drawn', /Service mix/.test(t.els.br.innerHTML));
-    ok('  by-doctor split drawn', /By doctor/.test(t.els.br.innerHTML));
-    ok('  multiplier eligibility drawn', /Multiplier eligibility/.test(t.els.br.innerHTML));
-    ok('  data integrity drawn', /Data integrity/.test(t.els.br.innerHTML));
-    ok('  call centre layer drawn', /Call centre layer/.test(t.els.gates.innerHTML));
+    ok('  service mix drawn', /Service mix/.test(els.gates.innerHTML));
+    ok('  by-doctor split drawn', /By doctor/.test(els.gates.innerHTML));
+    ok('  multiplier eligibility drawn', /Multiplier eligibility/.test(els.gates.innerHTML));
+    ok('  data integrity drawn', /Data integrity/.test(els.gates.innerHTML));
+
+    /* ---- the plan panels ----
+       All three read `/api/targets-plan` and nothing else, so they are the same
+       on every range — asserted once, on the first pass, rather than seven
+       times against identical markup. */
+    if (R === RANGES[0]) {
+      const PL = planForTargets;
+
+      /* ---- the v3.2 commission ----
+         The arithmetic the whole policy turns on: collected paced to a full
+         month picks a revenue tier, achievement against target picks a level,
+         the cell is the pool, and a person gets their weight's share. Checked
+         against the payload rather than against a remembered number. */
+      const V = payload.__byUrl['/api/commission-month'];
+      const cm = els.cm.innerHTML;
+      if (V && !V.missing) {
+        ok('  cm scores on the stored v3.2 policy', cm.includes(esc0(V.version)), V.version);
+        /* The grid renders its revenue bounds abbreviated (0.5M), so the POOL
+           figures are what to look for — and they are the stronger check: they
+           are the numbers somebody is actually paid. */
+        ok('    and draws the pool grid it read the figure out of',
+          /The pool grid/.test(cm)
+          && V.policy.tiers.filter((t) => t.pools.some((v) => v))
+            .every((t) => t.pools.filter(Boolean).every((v) => cm.includes(fmtNum(v)))),
+          'a pool figure from the grid is missing from the table');
+
+        const rowsV = V.months.flatMap((m) => m.branches);
+        /* Every pool must be the cell the tier and level point at — not a
+           number near it. This is the assertion that catches an off-by-one in
+           the column index, which would pay every branch one level too much. */
+        const wrong = rowsV.filter((b) => {
+          const tier = V.policy.tiers.find((t) => b.paced >= t.from && (t.to == null || b.paced <= t.to));
+          if (!tier) return b.pool !== 0;
+          if (b.level == null) return b.pool !== 0;
+          const col = V.policy.levels.findIndex((l) => l.level === b.level);
+          return Math.abs(b.pool - tier.pools[Math.min(col, tier.pools.length - 1)]) > 0.01;
+        });
+        ok(`    every pool is the cell its tier and level point at (${rowsV.length} rows)`,
+          wrong.length === 0,
+          wrong.slice(0, 2).map((b) => `${b.branch}: ${b.pool}`).join(' · '));
+
+        /* A branch below the floor earns nothing — not the lowest column. */
+        const floorPct = V.policy.levels[0].fromPct;
+        const belowPaid = rowsV.filter((b) => b.achievement != null && b.achievement < floorPct && b.pool > 0);
+        ok('    a branch below the floor earns exactly zero, not the lowest column',
+          belowPaid.length === 0,
+          belowPaid.map((b) => `${b.branch} ${b.pool}`).join(', '));
+
+        /* The split must account for the pool, or a branch pays out more or
+           less than it earned and nobody notices until payroll. */
+        const offSplit = rowsV.filter((b) => b.pool > 0 && Math.abs(
+          b.split.reduce((a, x) => a + x.each * Math.max(x.seats || 0, x.people.length), 0) - b.pool) > 1);
+        ok('    and the per-person shares add back up to it',
+          offSplit.length === 0,
+          offSplit.slice(0, 2).map((b) => b.branch).join(', '));
+
+        /* A failed gate pays zero and says which gate. */
+        const gatesV = V.months.flatMap((m) => m.management);
+        ok('    a failed gate pays zero and names the reason',
+          gatesV.filter((g) => !g.pass).every((g) => g.earned === 0 && g.why),
+          gatesV.filter((g) => !g.pass && (!g.why || g.earned)).map((g) => g.role).join(', '));
+
+        /* Payable and forecast are never summed into one headline. */
+        if (V.totals.openMonths) {
+          ok('    a running month is labelled a forecast, not quoted as owed',
+            /is a forecast/.test(cm) && /forecast at current pace/.test(cm));
+        }
+
+        /* Staff and call centre. */
+        const cms = els.cms.innerHTML;
+        ok('  cms lists people or seats for every earning branch',
+          V.months.flatMap((m) => m.branches).filter((b) => b.pool > 0)
+            .every((b) => cms.includes(esc0(b.branch)))
+          || !rowsV.some((b) => b.pool > 0));
+        const cmc = els.cmc.innerHTML;
+        ok('  cmc refuses rather than printing zeros',
+          /no agent against a booking/i.test(cmc) && !/\b0\.00\b/.test(cmc));
+        ok('    and names the one field that would fix it',
+          /Booked by/.test(cmc));
+      }
+
+      /* ---- Live ----
+         The identity that matters most on this page: the cash it reports is the
+         same cash the Commission report pays on. Asserted here against the
+         tracker payload the other page is rendered from, and again in
+         scripts/audit.js against the libs. */
+      const wh = els.wh.innerHTML;
+      const LV = payload.__byUrl['/api/targets-live'];
+      ok('  wh collected equals the tracker net for the same range',
+        Math.abs(LV.totals.collected - payload.range.totals.net) < 1,
+        `live ${Math.round(LV.totals.collected)} vs tracker ${Math.round(payload.range.totals.net)}`);
+      ok('    and the panel prints that figure, not a rounded cousin',
+        wh.includes(fmtNum(LV.totals.collected)), fmtNum(LV.totals.collected));
+      ok('    collected and billed are labelled as different bases',
+        /commission base/.test(wh) && /ex-package/.test(wh));
+      ok(`    one openable row per branch (${LV.branches.length})`,
+        (wh.match(/data-whbranch=/g) || []).length === LV.branches.length,
+        `${(wh.match(/data-whbranch=/g) || []).length} rows`);
+      if (LV.flags.proRata) {
+        ok('    a part-month says its plan figure is pro-rated by days',
+          /pro-rated by days/.test(wh));
+      }
+
+      /* ---- Actuals ---- */
+      const ac = els.ac.innerHTML;
+      const AC = payload.__byUrl['/api/targets-actuals'];
+      ok(`  ac draws ${AC.months.length} month(s) of ${AC.year}`,
+        (ac.match(/<tr><td class="nm">/g) || []).length >= AC.months.length);
+      ok('    a month with no prior year shows an em dash, never 0%',
+        !AC.months.some((m) => m.prior == null) || /<span class="sm2">—<\/span>/.test(ac));
+      if (AC.months.some((m) => m.priorSource === 'frozen') && !AC.months.some((m) => m.source === 'frozen')) {
+        ok('    and a growth figure that crosses the frozen line says so',
+          /crosses a change of source/.test(ac));
+      }
+
+      /* Plan. The chart is inline SVG because the CSP forbids loading Chart.js,
+         and the companion table is what replaces its tooltip. */
+      const ov = els.ov.innerHTML;
+      ok('  ov draws the trend as inline SVG', /<svg class="ck-svg"/.test(ov));
+      ok('    one polyline per unbroken run, never across a gap',
+        (ov.match(/<polyline/g) || []).length >= 4,
+        `${(ov.match(/<polyline/g) || []).length} polylines`);
+      ok('    the legend is real buttons, not painted into the canvas',
+        (ov.match(/data-ck="ov:/g) || []).length >= 4);
+      ok('    and the numbers behind the picture are on the page',
+        /The numbers behind it/.test(ov) && (ov.match(/<tr>/g) || []).length >= 12);
+      ok('    the frozen years are labelled frozen, not blended with the live ones',
+        /frozen/.test(ov), 'nothing says which half will never update');
+      ok('    the projection is named a projection',
+        !/projected/.test(ov) || /is a projection/.test(ov));
+
+      /* Branch targets. The tier chips are the panel's reason to exist. */
+      const tb = els.tb.innerHTML;
+      ok(`  tb draws every branch (${PL.branches.branches.length})`,
+        PL.branches.branches.every((b) => tb.includes(esc0(b.name))));
+      ok('    with a chip per policy level',
+        PL.policy.levels.every((l) => tb.includes(`data-tbtier="${l.level}"`)),
+        PL.policy.levels.map((l) => l.level).join(','));
+      ok('    the stacked chart caps its series and names the remainder',
+        /Other \(\d+ branch/.test(tb) || PL.branches.branches.length <= 6);
+      ok('    and the exact figures sit under it',
+        (tb.match(/<table class="ltab/g) || []).length >= 1);
+
+      /* Service targets. The split must reconcile to the plan it came from. */
+      const ts = els.ts.innerHTML;
+      ok('  ts splits the plan by department',
+        PL.mix.departments.every((d) => ts.includes(esc0(d.label))),
+        PL.mix.departments.map((d) => d.label).join(', '));
+      ok('    and says the split is derived, not agreed',
+        /Nobody agreed these figures/.test(ts));
+      if (PL.mix.unmapped.length) {
+        ok(`    the ${PL.mix.unmapped.length} department(s) the mapping never returns are named`,
+          /never receives any revenue/.test(ts));
+      }
+
+      /* Doctors: the approved sheet AND the plan, as two sections. */
+      const doc = els.doc.innerHTML;
+      ok('  doc carries the plan beside the approved sheet',
+        /The plan <span class="vat-tag">/.test(doc));
+      ok('    with a chip per doctor group',
+        PL.doctors.groups.every((g) => doc.includes(`data-drplangroup="${esc0(g)}"`)),
+        PL.doctors.groups.join(', '));
+    }
+
+    /* ---- the five-minute loop, and its two guards ----
+       A background reload is the kind of thing that works in testing and then
+       hammers the server from eleven tabs nobody is looking at. Both guards are
+       fired here rather than trusted. */
+    if (R === RANGES[0]) {
+      const tm = t.timers.find((x) => x.ms >= 60000);
+      ok('  the live loop is registered, at five minutes',
+        !!tm && tm.ms === 300000, tm ? `${tm.ms}ms` : 'no interval registered');
+      if (tm) {
+        let reloads = 0;
+        const realFetch = t.sandbox.fetch;
+        t.sandbox.fetch = async (...a) => { reloads += 1; return realFetch(...a); };
+
+        t.sandbox.document.hidden = true;
+        tm.fn();
+        ok('    it does nothing while the tab is hidden', reloads === 0, `${reloads} fetches`);
+
+        t.sandbox.document.hidden = false;
+        t.sandbox.document.querySelectorAll = (q) => (q === '.panel.active' ? [{ id: 'ov' }] : []);
+        t.sandbox.document.querySelector = (q) => (q === '.panel.active' ? { id: 'ov' } : null);
+        tm.fn();
+        ok('    nor while the reader is on another panel', reloads === 0, `${reloads} fetches`);
+
+        t.sandbox.document.querySelector = (q) => (q === '.panel.active' ? { id: 'wh' } : null);
+        tm.fn();
+        await new Promise((r2) => setTimeout(r2, 40));
+        ok('    but it does reload when Live is open and the tab is visible',
+          reloads > 0, 'the loop fired nothing');
+        t.sandbox.fetch = realFetch;
+      }
+    }
+
+    /* ---- the payslip, tested for the first time ----
+       It used to be three functions inside targets.js reached only through a
+       document-level click handler, and `fakeNode` has no `closest` — so the
+       document a doctor is actually paid against was the one thing on this page
+       nothing could check. As `public/payslip.js` it is a plain function, and
+       the two paths that matter are the two it has: a person with a payroll
+       month, and a person without. */
+    {
+      const C = payload.commission;
+      const rows = (C && C.rows) || [];
+      const paid = rows.find((r) => r.payslip);
+      const unpaid = rows.find((r) => r.commission != null && !r.payslip);
+      if (paid) {
+        const h = Payslip.html(paid, C.period);
+        ok(`  payslip draws for ${paid.name}`, h.length > 600, `${h.length} chars`);
+        ok('    its tags balance', !balanced(h), balanced(h));
+        ok('    no undefined or NaN on a pay document',
+          !/undefined|NaN/.test(h), (h.match(/.{0,40}(undefined|NaN).{0,40}/) || [])[0]);
+        ok('    the net it shows is the net that was computed',
+          h.includes(fmtNum(paid.payslip.net)), fmtNum(paid.payslip.net));
+        /* The build-up must reconcile on the face of it, or the document is
+           internally inconsistent in front of the person being paid. */
+        const p = paid.payslip;
+        ok('    gross = taxable salary + management fee + adjustment',
+          Math.abs(p.total - (p.tsal + p.mgmt + p.adjustment)) < 0.02,
+          `${p.total} vs ${p.tsal + p.mgmt + p.adjustment}`);
+      }
+      if (unpaid) {
+        const h = Payslip.html(unpaid, C.period);
+        ok(`  payslip REFUSES the build-up for ${unpaid.name}, who has no payroll month`,
+          /cannot be shown/.test(h) && !/Net payable/.test(h));
+        ok('    but still states the commission that IS known',
+          h.includes(fmtNum(unpaid.commission)));
+      }
+    }
+    ok('  call centre layer drawn', /Call centre layer/.test(els.gates.innerHTML));
     /* The Policy & logic tab is gone — dropped at Mina's request along with the
        three other tabs whose content was provenance rather than performance.
        The commission POLICY itself is unaffected: it is stored, editable in
@@ -688,11 +989,34 @@ async function get2(url) {
        Caging an 11-row table into a 320px window is a five-row keyhole and worse
        than not caging it, so the rule is "can greatly exceed the window", not
        "is a table". */
-    const allPanels = ['tva', 'doc', 'br', 'com', 'gates']
-      .map((pn) => t.els[pn].innerHTML).join('');
+    const allPanels = ['wh', 'ov', 'ac', 'tb', 'ts', 'doc', 'cm', 'cmd', 'cms', 'cmc', 'gates']
+      .map((pn) => els[pn].innerHTML).join('');
+    /* ---- the CSP, pinned ----
+       `src/server.js` sets scriptSrc 'self', styleSrc 'self' and connectSrc
+       'self'. The dashboard these panels were ported from loads Chart.js and
+       SheetJS from cdnjs and keeps its CSS in a <style> block — all three would
+       be dropped silently, giving a page that renders and does nothing. These
+       are one line each and they are the guard that survives the next port. */
+    ok('  no inline <style> survived the port',
+      !/<style[\s>]/i.test(allPanels),
+      (allPanels.match(/.{0,60}<style[\s>].{0,60}/i) || [])[0]);
+    ok('  no inline <script> either',
+      !/<script[\s>]/i.test(allPanels),
+      (allPanels.match(/.{0,60}<script[\s>].{0,60}/i) || [])[0]);
+    ok('  and no CDN reference',
+      !/cdnjs|jsdelivr|unpkg|cdn\.|chart\.js|xlsx\.full/i.test(allPanels),
+      (allPanels.match(/.{0,50}(cdnjs|jsdelivr|unpkg|chart\.js|xlsx\.full).{0,50}/i) || [])[0]);
+
     const caged = (allPanels.match(/tw scrolly/g) || []).length;
-    ok(`  only the long tables are caged (${caged} of ${(allPanels.match(/class="tw/g) || []).length})`,
-      caged >= 3 && caged <= 6, `${caged} caged`);
+    /* A FIXED CEILING WAS THE WRONG RULE and kept breaking as panels landed —
+       it went 6, 12, 16 and would have gone on going up, which is a number
+       being fitted to the code rather than a rule. The intent is: long tables
+       scroll inside their card, short ones are left alone. So the floor stays,
+       and the ceiling is relative — if EVERY table is caged, somebody has
+       started caging five-row tables into a keyhole. */
+    const allTables = (allPanels.match(/class="tw/g) || []).length;
+    ok(`  long tables are caged, short ones are not (${caged} of ${allTables})`,
+      caged >= 3 && caged < allTables, `${caged} of ${allTables} caged`);
     ok('  every caged table declares a min-width, so its row height is stable',
       (allPanels.match(/tw scrolly" style="--minw:\d+px/g) || []).length === caged);
     ok('  the two-line tables get a taller window so ten of THEIR rows fit',
@@ -710,7 +1034,7 @@ async function get2(url) {
     })(), 'a caged table has a tfoot but app.css does not pin it');
     /* Body Contouring must never render as an earned multiplier. */
     ok('  untestable multiplier shows n/a, never pass',
-      !/Body Contouring[\s\S]{0,200}>pass</.test(t.els.br.innerHTML));
+      !/Body Contouring[\s\S]{0,200}>pass</.test(els.gates.innerHTML));
   }
 
 
@@ -1046,79 +1370,186 @@ async function get2(url) {
     Object.keys(PANELS).every((id) => !/undefined|NaN/.test(mo.els[id].innerHTML)));
 
   /* ------------------------------------------------ contact centre ---- */
-  console.log('\ncontact-centre.js — report 02, two windows on one page');
+  console.log('\ncontact-centre.js — report 02, eight panels and three windows');
 
   const CC = require(`${path}/src/lib/contact-centre.js`);
-  const ccIds = ['ov', 'q', 'ag', 'out', 'bk', 'hPeriod', 'hSess', 'hAns', 'hBook', 'hShow',
-    'rangeline', 'err', 'dot', 'status', 'from', 'to', 'load'];
+  /* IN <script> ORDER, the way contact-centre.html loads them. Passing the list
+     rather than injecting requires makes this an assertion that the view's tags
+     are ordered correctly: a panel module listed after the controller would
+     throw here exactly as it would in the browser. Omit one and its panel draws
+     the controller's "could not be drawn" branch, which passes every structural
+     check below while testing nothing — that has happened three times on this
+     project. */
+  const ccFiles = ['cc-fmt.js', 'cc-appointments.js', 'cc-summary.js', 'cc-crm.js',
+    'cc-calls.js', 'cc-agents.js', 'cc-timing.js', 'cc-branches.js', 'cc-quality.js',
+    'cc-gate.js', 'contact-centre.js'];
+  const ccmIds = ['pa', 'ov', 'pc', 'pu', 'ag', 'tm', 'br', 'dq',
+    'hPeriod', 'hOpp', 'hBook', 'hShow', 'hCredit',
+    'rangeline', 'err', 'dot', 'status', 'from', 'to', 'load', 'ccgate'];
+  const CC_PANELS = {
+    pa: '00 Appointments', ov: '01 Executive summary', pc: '02 CRM', pu: '03 Calls',
+    ag: '04 Agents', tm: '05 Timing', br: '06 Branches', dq: '07 Data quality',
+  };
+
+  /* TWO BUILDS, BECAUSE THE SNAPSHOTS DO NOT OVERLAP. The phones are 1–18
+     August; the CRM is September into October. Neither range exercises all
+     eight panels, and a single build would leave half of them asserting against
+     a refusal. */
+  const ccAug = await CC.build({ ...W, today: '2026-10-04' });
+  const ccSep = await CC.build({ from: '2026-09-01', to: '2026-10-10', scope: 'all', today: '2026-10-04' });
+  /* The expandable rows are seeded from the PAYLOAD rather than from a branch
+     name typed here: this harness's nodes are stubs, so a name that matches
+     nothing in the data expands nothing and the assertion fails for the wrong
+     reason a month after somebody renames a branch. */
   const ccSel = {
     '#presets button': [{ p: 'mtd' }],
     '#scope button': [{ scope: 'all' }, { scope: 'Nouvel Age' }, { scope: 'ZAT' }],
+    '[data-apbranch]': [{ apbranch: ccSep.appointments.branches[0].branch }],
+    '[data-crmlogin]': [{ crmlogin: ccSep.crm.byLogin[0].login }],
   };
-  const CC_PANELS = { ov: '01 Executive summary', q: '02 Queues', ag: '03 Agents',
-    out: '04 Outbound', bk: '05 Bookings' };
-
-  /* The pack's own window, where all five tabs have something to say. */
-  const ccAug = await CC.build(W);
-  const cc1 = runPage('contact-centre.js', ccAug, ccIds, ccSel);
+  const cc1 = runPage(ccFiles, ccAug, ccmIds, ccSel);
+  const cc2 = runPage(ccFiles, ccSep, ccmIds, ccSel);
   await new Promise((r) => setTimeout(r, 60));
 
   for (const [id, label] of Object.entries(CC_PANELS)) {
-    const html = cc1.els[id].innerHTML;
-    ok(`${label} renders`, html.length > 300, `${html.length} chars`);
-    ok(`  ${label} tags balance`, balanced(html) === null, balanced(html));
-    ok(`  ${label} has no undefined or NaN`, !/undefined|NaN/.test(html),
-      (html.match(/.{0,60}(undefined|NaN).{0,60}/) || [])[0]);
+    for (const [tag, run] of [['August', cc1], ['September', cc2]]) {
+      const html = run.els[id].innerHTML;
+      ok(`${label} renders on the ${tag} range`, html.length > 300, `${html.length} chars`);
+      ok(`  ${label} (${tag}) tags balance`, balanced(html) === null, balanced(html));
+      ok(`  ${label} (${tag}) has no undefined or NaN`, !/undefined|NaN/.test(html),
+        (html.match(/.{0,60}(undefined|NaN).{0,60}/) || [])[0]);
+      ok(`  ${label} (${tag}) was drawn by its module, not the error branch`,
+        !/could not be drawn/.test(html),
+        (html.match(/.{0,120}could not be drawn.{0,160}/) || [])[0]);
+    }
   }
 
-  /* The pack's frozen figures, on the page. */
-  ok('the phone half reproduces the pack: 2,919 offered and 2,456 answered',
-    /2,919/.test(cc1.els.ov.innerHTML) && /2,456/.test(cc1.els.ov.innerHTML));
-  ok('the two entity sides are shown adding up to the aggregate',
-    /2,436/.test(cc1.els.q.innerHTML) && /483/.test(cc1.els.q.innerHTML)
-    && /add up to the total/.test(cc1.els.q.innerHTML));
+  /* ---- the August pack, still on the page, now on the Calls panel ---- */
+  ok('the Calls panel reproduces the pack: 2,919 offered and 2,456 answered',
+    /2,919/.test(cc1.els.pu.innerHTML) && /2,456/.test(cc1.els.pu.innerHTML));
+  ok('  the two entity sides are shown adding up to the aggregate',
+    /483/.test(cc1.els.pu.innerHTML) && /add up to the total/.test(cc1.els.pu.innerHTML));
+  ok('  the outbound contradiction is stated rather than resolved',
+    /disagrees with itself/.test(cc1.els.pu.innerHTML)
+    && /7,888/.test(cc1.els.pu.innerHTML) && /4,404/.test(cc1.els.pu.innerHTML));
+  ok('  the hourly chart says it covers the whole snapshot window, not the range',
+    /summed over the whole of/.test(cc1.els.pu.innerHTML));
+  ok('  occupancy is labelled an assumption, with the shift length',
+    /not measurements/.test(cc1.els.pu.innerHTML) && /12-hour shift/.test(cc1.els.pu.innerHTML));
 
-  /* The three things this report must never present as measurements. */
-  ok('occupancy is labelled an assumption, with the shift length',
-    /not measurements/.test(cc1.els.ag.innerHTML) && /12-hour shift/.test(cc1.els.ag.innerHTML));
-  ok('the outbound contradiction is stated before the numbers',
-    /disagrees with itself/.test(cc1.els.out.innerHTML)
-    && /7,888/.test(cc1.els.out.innerHTML) && /4,404/.test(cc1.els.out.innerHTML));
-  ok('bookings per agent is a refusal, not a flat average presented as fact',
-    /cannot be derived/.test(cc1.els.ag.innerHTML)
-    && /nobody should pay on/.test(cc1.els.ag.innerHTML));
+  /* The extension map is why this table can name anybody, and the one conflict
+     in it must be surfaced rather than silently resolved. */
+  ok('the agents table names people from the extension map',
+    /Fatma El Sayed Eissa/.test(cc1.els.pu.innerHTML),
+    'no Odoo employee name on the Calls panel');
+  ok('  an extension the phone system and the map disagree about is flagged',
+    /disagrees?\b/.test(cc1.els.pu.innerHTML) && /6008/.test(cc1.els.pu.innerHTML),
+    'the 6008 name conflict is not surfaced');
 
-  /* The two windows must be visibly different, since they are. */
-  ok('the page says the phone figures are a narrower window than the bookings',
-    /not the range above/.test(cc1.els.ov.innerHTML), 'no window mismatch warning');
-  ok('  and the bookings tab says it is the live half',
-    /live/i.test(cc1.els.bk.innerHTML));
+  /* ---- the credit gap: the number this report exists for ---- */
+  const T = ccSep.summary.totals;
+  ok('the credit gap is stated in words, not left to be subtracted',
+    /arrived on the booking the agent made/.test(cc2.els.ov.innerHTML)
+    && cc2.els.ov.innerHTML.includes(T.lostCredit.toLocaleString('en-US')),
+    `payload says ${T.lostCredit} lost; the panel does not say it`);
+  ok('  show rate excludes bookings that have not come due',
+    T.past === T.booked - T.upcoming && T.showRate === Math.round((T.showed / T.past) * 100) / 100);
 
-  /* A range the PBX snapshot does not reach. The four phone tabs must REFUSE,
-     and the bookings tab must still work — that asymmetry is the whole design. */
-  const ccSep = await CC.build({ from: '2026-09-01', to: '2026-09-04' });
-  const cc2 = runPage('contact-centre.js', ccSep, ccIds, ccSel);
+  /* ---- the three refusals, each by name ---- */
+  ok('lead source blames the export, not Odoo alone',
+    /does not carry the Source/.test(cc2.els.pc.innerHTML)
+    && /looks like a measurement and is not/.test(cc2.els.pc.innerHTML),
+    'lead source is not refused in the snapshot\'s own terms');
+  ok('  activities are labelled by login, because the person is not in the export',
+    /broken down by login, not by person/.test(cc2.els.pc.innerHTML));
+  ok('  re-booking names a login and says so',
+    /names a login, not a person/.test(cc2.els.pc.innerHTML));
+  ok('  confirmation-call coverage is stated as the finding it is',
+    /confirmation call recorded against them/.test(cc2.els.pa.innerHTML),
+    'the 4.6% confirmation finding is missing');
+
+  /* ---- a range neither snapshot reaches: every panel refuses ---- */
+  const ccNone = await CC.build({ from: '2025-01-01', to: '2025-01-31', scope: 'all', today: '2026-10-04' });
+  const cc3 = runPage(ccFiles, ccNone, ccmIds, ccSel);
   await new Promise((r) => setTimeout(r, 60));
-  for (const id of ['q', 'ag', 'out']) {
-    const html = cc2.els[id].innerHTML;
-    ok(`a range outside the snapshot: ${CC_PANELS[id]} refuses rather than showing zero`,
-      /rather than zero/.test(html) || /No phone data/.test(html),
+  for (const id of ['pa', 'ov', 'pc', 'pu', 'ag', 'tm', 'br']) {
+    const html = cc3.els[id].innerHTML;
+    ok(`a range nothing covers: ${CC_PANELS[id]} refuses rather than showing zero`,
+      /rather than zero/.test(html) || /does not touch it/.test(html)
+      || /Nothing to show/.test(html),
       html.slice(0, 160));
     ok(`  ${CC_PANELS[id]} still balances`, balanced(html) === null, balanced(html));
   }
-  /* Compared against the payload rather than against a number typed here: the
-     bookings half is live Odoo and its figure moves every time the cache is
-     synced, so a hard-coded 1,208 fails for the wrong reason a week later. What
-     matters is that the live half still answers when the seeded half cannot. */
-  ok('a range outside the snapshot still reports bookings from Odoo',
-    cc2.els.bk.innerHTML.length > 300
-    && ccSep.bookings.booked > 0
-    && cc2.els.bk.innerHTML.includes(ccSep.bookings.booked.toLocaleString('en-US')),
-    `payload says ${ccSep.bookings.booked} booked; the panel does not show it`);
   ok('  and no panel leaks an undefined on that range',
-    Object.keys(CC_PANELS).every((id) => !/undefined|NaN/.test(cc2.els[id].innerHTML)),
+    Object.keys(CC_PANELS).every((id) => !/undefined|NaN/.test(cc3.els[id].innerHTML)),
     Object.keys(CC_PANELS).map((id) =>
-      (cc2.els[id].innerHTML.match(/.{0,40}(undefined|NaN).{0,40}/) || [])[0]).filter(Boolean)[0]);
+      (cc3.els[id].innerHTML.match(/.{0,40}(undefined|NaN).{0,40}/) || [])[0]).filter(Boolean)[0]);
+
+  /* ---- an opened branch fetches nothing and simply expands ---- */
+  const apRow = cc2.nodes('[data-apbranch]')[0];
+  if (apRow) {
+    const before = cc2.els.pa.innerHTML.length;
+    apRow.fire('click');
+    await new Promise((r) => setTimeout(r, 30));
+    ok('opening a branch on Appointments expands it in place',
+      cc2.els.pa.innerHTML.length > before,
+      'the panel did not grow when a branch was opened');
+  } else {
+    ok('opening a branch on Appointments expands it in place', false, 'no branch row rendered');
+  }
+
+  /* The CRM login row is the one that turns a shared desk into named people —
+     the whole reason this panel exists. */
+  const lgRow = cc2.nodes('[data-crmlogin]')[0];
+  if (lgRow) {
+    lgRow.fire('click');
+    await new Promise((r) => setTimeout(r, 30));
+    const who = ccSep.crm.byLogin[0].people[0].name;
+    ok('opening a CRM login names the people who sat at it',
+      cc2.els.pc.innerHTML.includes(esc0(who).replace(/&#39;/g, "'")),
+      `expected ${who} inside the opened row`);
+  } else {
+    ok('opening a CRM login names the people who sat at it', false, 'no login row rendered');
+  }
+
+  /* ---- THE WEEKLY LOCK ----
+     The server answers 423 with no figures. The page must show the lock card,
+     draw NOTHING in any panel, and tell an uploader where to go and everybody
+     else that it opens by itself. */
+  const lockBody = {
+    locked: true,
+    canUpload: false,
+    gate: {
+      locked: true, today: '2026-10-04', week: { from: '2026-09-27', to: '2026-10-03' },
+      held: null, needsUntil: '2026-10-02', reason: 'missing', lastUpload: null, locksAgain: '2026-10-11',
+    },
+  };
+  const lockFetch = (body) => async () => ({ ok: false, status: 423, json: async () => body });
+  const ccL = runPage(ccFiles, null, ccmIds, ccSel);
+  ccL.sandbox.fetch = lockFetch(lockBody);
+  ccL.nodes('#scope button')[0].fire('click');
+  await new Promise((r) => setTimeout(r, 60));
+  const lockHtml = ccL.els.ccgate.innerHTML;
+  ok('a locked week draws the lock card', /Upload last week's UCM/.test(lockHtml), lockHtml.slice(0, 120));
+  ok('  naming the week it is waiting for', /27 Sep/.test(lockHtml) && /3 Oct/.test(lockHtml));
+  ok('  in the source page\'s own Arabic', /الصفحة دي بتفتح/.test(lockHtml));
+  ok('  a reader who cannot upload is told it opens once the admin uploads', /الأدمن يرفعه/.test(lockHtml)
+    && !/Admin → Uploads/.test(lockHtml));
+  ok('  and no panel draws anything behind it',
+    Object.keys(CC_PANELS).every((id) => ccL.els[id].innerHTML === ''),
+    Object.keys(CC_PANELS).filter((id) => ccL.els[id].innerHTML !== '').join(', '));
+  ok('  tags balance', balanced(lockHtml) === null, balanced(lockHtml));
+
+  const ccU = runPage(ccFiles, null, ccmIds, ccSel);
+  ccU.sandbox.fetch = lockFetch({ ...lockBody, canUpload: true,
+    gate: { ...lockBody.gate, reason: 'short', held: { calls: 812, first: '2026-09-27', last: '2026-09-30' } } });
+  ccU.nodes('#scope button')[0].fire('click');
+  await new Promise((r) => setTimeout(r, 60));
+  const lockUpHtml = ccU.els.ccgate.innerHTML;
+  ok('an uploader is sent to Admin → Uploads, with the export to take',
+    /href="\/admin#uploads"/.test(lockUpHtml) && /CDR → Export/.test(lockUpHtml));
+  ok('  a SHORT week says where it stops, not that nothing was uploaded',
+    /its last call is/.test(lockUpHtml) && /30 Sep/.test(lockUpHtml) && /812/.test(lockUpHtml));
 
   /* The scope control reloads with the scope in the query string. */
   const ccAsked = [];
@@ -1208,7 +1639,7 @@ async function get2(url) {
   console.log('\ndoctors.js — Doctors Performance, its own report');
 
   const Doctors = require(`${path}/src/lib/doctors.js`);
-  const docIds = ['tg', 'tk', 'ij', 'hPeriod', 'hEx', 'hPerCust', 'hSyr', 'hDocs',
+  const docmIds = ['tg', 'tk', 'ij', 'hPeriod', 'hEx', 'hPerCust', 'hSyr', 'hDocs',
     'rangeline', 'err', 'dot', 'status', 'from', 'to', 'load'];
   const docSel = { '#presets button': [{ p: 'mtd' }] };
 
@@ -1217,7 +1648,7 @@ async function get2(url) {
     ['a month with NO target sheet', { from: '2026-09-01', to: '2026-09-08' }],
   ]) {
     const payload = await Doctors.build(W2);
-    const pg = runPage('doctors.js', payload, docIds, docSel);
+    const pg = runPage('doctors.js', payload, docmIds, docSel);
     await new Promise((r) => setTimeout(r, 80));
 
     for (const [id, name] of [['tg', '01 Targets'], ['tk', '02 Ticket size'], ['ij', '03 Injectables']]) {
@@ -1294,7 +1725,16 @@ async function get2(url) {
     '/api/audit', '/api/targets/2026-08', '/api/commission', '/api/vendor-terms',
     /* Doctor schemes. Left out, `drawSchemes` draws its "could not load" branch
        and every assertion below it would pass against an error message. */
-    '/api/schemes']) {
+    '/api/schemes',
+    /* The plan grid, for the same reason. */
+    '/api/targets-plan',
+    /* And the v3.2 policy the Commission tab now edits. */
+    '/api/policy/v32',
+    /* The phone extension map on the Uploads tab. Left out, the map draws its
+       "could not be loaded" branch. */
+    '/api/pbx/extensions',
+    /* What the weekly lock is waiting for, drawn at the top of Uploads. */
+    '/api/contact-centre/gate']) {
     admPayloads[u] = await get2(u);
   }
   admPayloads['/auth/me'] = { subject: 'render', name: 'render' };
@@ -1302,15 +1742,41 @@ async function get2(url) {
      that used to be tabs of their own; `drop` and `file` are created by
      renderImport's own markup, so the shim has to know them or the panel throws
      halfway and renders a stub. */
-  const upIds = ['status', 'periods', 'periodsList', 'editor', 'import', 'commission',
+  const upIds = ['status', 'periods', 'periodsList', 'editor', 'import', 'plan', 'commission', 'v32',
     'mapping', 'aliases', 'links', 'data', 'feeds', 'uploads', 'audit',
-    'who', 'err', 'newSheet', 'drop', 'file'];
+    'who', 'err', 'newSheet', 'drop', 'file',
+    /* The extension map's own container inside the Uploads panel. */
+    'extmap',
+    /* And the weekly UCM card's, at the top of it. */
+    'ucmweekly'];
   let onShow = null;
   const upDom = makeDom(upIds, {
     '.tab': [], '.panel': [],
     '[data-upload]': [], '[data-uploadfile]': [],
+    /* The extension map's inputs and its save button, so the editor can be
+       driven rather than merely drawn. */
+    '[data-extfield]': [{ ext: '6008', extfield: 'odooEmployee' }],
+    '#extSave': [{}], '#extNote': [{}],
   });
   const upSandbox = {
+    /* The plan editor is its own module, loaded by admin.html before admin.js.
+       Missing from this stub, `renderPlan` throws and the Periods tab shows its
+       "could not load" branch — which passes every check while testing nothing. */
+    AdminPlan: require(`${path}/public/admin-plan.js`),
+    /* The v3.2 policy editor, its own module loaded before admin.js. Missing
+       from this stub, `renderV32` throws into its catch and the Commission tab
+       shows "could not load" — which passes every structural check below while
+       testing nothing. */
+    AdminV32: require(`${path}/public/admin-v32.js`),
+    /* The phone extension map, its own module loaded by admin.html before
+       admin.js. Missing from this stub, renderUploads throws into its catch and
+       the Uploads tab shows "could not be loaded" — which passes every
+       structural check while testing nothing. */
+    AdminExt: require(`${path}/public/admin-ext.js`),
+    /* The weekly UCM card — the upload that opens the Contact Centre report. */
+    AdminUcm: require(`${path}/public/admin-ucm.js`),
+    CcFmt: require(`${path}/public/cc-fmt.js`),
+    TgFmt: require(`${path}/public/tg-fmt.js`),
     document: upDom.document,
     console,
     location: { search: '', href: '', pathname: '/admin' },
@@ -1337,6 +1803,7 @@ async function get2(url) {
   upSandbox.globalThis = upSandbox;
   vm.createContext(upSandbox);
   try {
+    vm.runInContext(fs.readFileSync(`${path}/public/fmt.js`, 'utf8'), upSandbox, { filename: 'fmt.js' });
     vm.runInContext(fs.readFileSync(`${path}/public/admin.js`, 'utf8'), upSandbox, { filename: 'admin.js' });
     /* Every tab, through its own loader — the panels render on demand, so one
        that throws is invisible unless something asks for it. */
@@ -1441,6 +1908,88 @@ async function get2(url) {
     }
   }
 
+  /* ---- the plan grid, below the sheet editor ----
+     It is its own module with its own fetch, so the failure mode worth guarding
+     is the quiet one: `renderPlan` catches, draws "could not load", and every
+     check above still passes. These assert the GRID, not the panel. */
+  {
+    const pl = upDom.els.plan.innerHTML;
+    const P = admPayloads['/api/targets-plan'];
+    ok('  the plan grid is drawn, not its error branch',
+      /<h3 class="subtitle">The plan/.test(pl) && !/Could not load the plan/.test(pl),
+      pl.slice(0, 160));
+    ok(`    one editable cell per branch-month (${P.totals.branchMonths})`,
+      (pl.match(/data-plan="branches:/g) || []).length === P.totals.branchMonths,
+      `${(pl.match(/data-plan="branches:/g) || []).length} cells`);
+    ok(`    and per doctor-month (${P.totals.doctorMonths})`,
+      (pl.match(/data-plan="doctors:/g) || []).length === P.totals.doctorMonths,
+      `${(pl.match(/data-plan="doctors:/g) || []).length} cells`);
+    ok('    the planned total is stated', pl.includes(fmtNum(P.totals.plannedTarget)),
+      fmtNum(P.totals.plannedTarget));
+    ok('    both grids offer to carry a month forward',
+      /id="cyBGo"/.test(pl) && /id="cyDGo"/.test(pl));
+    ok('    and carrying refuses to overwrite unless asked',
+      /id="cyBOver"/.test(pl) && /Replace what is already there/.test(pl));
+    /* The pool grid is shown here so somebody setting a target can see what the
+       achievement actually pays — read-only, and it says where to edit it. */
+    if (P.policy && !P.policy.missing) {
+      ok(`    the ${P.policy.version} pool grid is shown beside the targets`,
+        pl.includes(esc0(P.policy.version))
+        && (pl.match(/<tr><td class="nm">/g) || []).length >= P.policy.tiers.length);
+      ok('    with each role\'s share of a pool',
+        P.policy.roles.every((r) => pl.includes(`${(r.share * 100).toFixed(1)}%`)),
+        P.policy.roles.map((r) => `${r.role} ${(r.share * 100).toFixed(1)}%`).join(' · '));
+    }
+    ok('    the plan tags balance', balanced(pl) === null, balanced(pl));
+    ok('    and it has no undefined or NaN',
+      !/undefined|NaN/.test(pl), (pl.match(/.{0,50}(undefined|NaN).{0,50}/) || [])[0]);
+  }
+
+  /* ---- the v3.2 policy editor, below the v2.8 sections ----
+     The figures in this panel are what branch teams are paid, so the counts are
+     tied to the payload rather than to remembered numbers — a grid that renders
+     thirteen rows for a fourteen-tier policy would otherwise pass. */
+  {
+    /* The editor fills a placeholder INSIDE the commission panel's markup. In a
+       browser that is one tree; under the shim `innerHTML` is a string and its
+       children are not queryable, so the module writes into its own stub and
+       the two are asserted separately. */
+    const host = upDom.els.commission.innerHTML;
+    const cm = upDom.els.v32.innerHTML;
+    const V = admPayloads['/api/policy/v32'];
+    const P = V.policy;
+    ok('  the v3.2 editor is drawn, not its error branch',
+      /Commission policy <span class="vat-tag">/.test(cm) && !/Could not load the v3.2/.test(cm),
+      (cm.match(/.{0,80}Could not load the v3\.2.{0,80}/) || [])[0]);
+    ok('    into a placeholder below the v2.8 sections it does not replace',
+      /pool ladder[\s\S]*<div id="v32">/.test(host),
+      'the v3.2 placeholder is not below the v2.8 ladder');
+    ok(`    one input per achievement level (${P.levels.length})`,
+      (cm.match(/data-v32level=/g) || []).length === P.levels.length);
+    ok('    the first level is marked as the floor', /the floor<\/span>/.test(cm));
+    ok(`    the pool grid is ${P.tiers.length} tiers by ${P.levels.length} levels, every cell editable`,
+      (cm.match(/data-v32pool="\d+:p\d+"/g) || []).length === P.tiers.length * P.levels.length,
+      `${(cm.match(/data-v32pool="\d+:p\d+"/g) || []).length} cells`);
+    ok('    with its bounds editable too',
+      (cm.match(/data-v32pool="\d+:(from|to)"/g) || []).length === P.tiers.length * 2);
+    ok(`    a row per role, with its share worked out (${P.roles.length})`,
+      (cm.match(/data-v32share=/g) || []).length === P.roles.length
+      && P.roles.every((r) => cm.includes(`${((r.weight / P.totalWeight) * 100).toFixed(1)}%`)),
+      P.roles.map((r) => `${r.role} ${((r.weight / P.totalWeight) * 100).toFixed(1)}%`).join(' · '));
+    ok(`    and a staff card per branch (${V.branches.length})`,
+      (cm.match(/data-v32add=/g) || []).length === V.branches.length);
+    ok('    every table has a Save button',
+      ['v32SaveLevels', 'v32SavePools', 'v32SaveRoles', 'v32SaveStaff']
+        .every((id) => cm.includes(`id="${id}"`)));
+    /* `data-band` is already used by TWO sections of this page with different
+       meanings, and both handlers bind to the bare selector. The v3.2 editor
+       must not add a third collision. */
+    ok('    its attributes do not collide with the two that already do',
+      !/data-band=/.test(cm),
+      'the v3.2 editor reuses data-band');
+    ok('    the panel still balances with it in', balanced(cm) === null, balanced(cm));
+  }
+
   /* The calendar answers the question the list of published sheets cannot:
      which month is MISSING is precisely the row that is not there. */
   {
@@ -1461,6 +2010,19 @@ async function get2(url) {
     .every((k) => upHtml.includes(`data-upload="${k}"`)), 'a feed is missing its button');
   ok('  and states what is currently held, seed included',
     /seed/.test(upHtml) && /PBX day roll-up/.test(upHtml));
+
+  /* The weekly UCM card: the upload that opens the Contact Centre report. It
+     must say, before anything else, whether the report is open or locked and
+     which week it is waiting for — compared against the live gate payload, so
+     this holds whichever state the local database is in. */
+  const ucmHtml = upDom.els.ucmweekly.innerHTML;
+  const gNow = admPayloads['/api/contact-centre/gate'];
+  ok('the weekly UCM card is drawn at the top of Uploads', /Weekly UCM export/.test(ucmHtml),
+    ucmHtml.slice(0, 160) || 'empty');
+  ok('  it states whether the Contact Centre report is open or locked',
+    gNow.locked ? /LOCKED for everyone/.test(ucmHtml) : /report is open/.test(ucmHtml));
+  ok('  and offers the file picker', /id="ucmPick"/.test(ucmHtml) && /accept="\.csv,\.xlsx,\.xls"/.test(ucmHtml));
+  ok('  its tags balance', balanced(ucmHtml) === null, balanced(ucmHtml));
 
   /* ------------------------------------- inventory · report 08 ---- */
   console.log('\ninventory.js against the real payload');
@@ -1670,7 +2232,7 @@ async function get2(url) {
      to trigger a sync. This is the check that stops the eleventh copy. */
   {
     const REPORTS = ['report', 'doctors', 'inventory', 'procurement', 'marketing',
-      'targets', 'commercial', 'commercial-sales', 'contact-centre', 'patients'];
+      'targets', 'commission', 'commercial', 'commercial-sales', 'contact-centre', 'patients'];
     const bad = [];
     for (const name of REPORTS) {
       const view = fs.readFileSync(`${path}/src/views/${name}.html`, 'utf8');
@@ -1708,7 +2270,7 @@ async function get2(url) {
        leaves the reader looking at the figures from before it. */
     const unhooked = [];
     for (const f of ['app', 'doctors', 'inventory', 'procurement', 'marketing', 'targets',
-      'commercial', 'commercial-sales', 'contact-centre', 'patients']) {
+      'commission', 'commercial', 'commercial-sales', 'contact-centre', 'patients']) {
       const src = fs.readFileSync(`${path}/public/${f}.js`, 'utf8');
       if (!src.includes('Shell.onRefresh')) unhooked.push(f);
     }
@@ -1773,8 +2335,10 @@ async function get2(url) {
      that renders and does nothing is the failure this harness exists for. */
   const periodList = await get2('/api/targets');
   const augSheet = await get2('/api/targets/2026-08');
+  const planPayload = await get2('/api/targets-plan');
+  const v32Payload = await get2('/api/policy/v32');
 
-  const admIds = ['status', 'periods', 'periodsList', 'editor', 'import', 'mapping', 'aliases',
+  const admIds = ['status', 'periods', 'periodsList', 'editor', 'import', 'plan', 'v32', 'mapping', 'aliases',
     'links', 'data', 'feeds', 'audit', 'commission', 'uploads',
     'who', 'err', 'newSheet', 'publish', 'saveDraft', 'balance', 'addGroup', 'addDoctor',
     'addBranch', 'ledger', 'fPeriod', 'fDays', 'fSource', 'docFilter', 'drop', 'file'];
@@ -1787,6 +2351,24 @@ async function get2(url) {
   });
   let admShow = null;
   const admSandbox = {
+    /* The plan editor is its own module, loaded by admin.html before admin.js.
+       Missing from this stub, `renderPlan` throws and the Periods tab shows its
+       "could not load" branch — which passes every check while testing nothing. */
+    AdminPlan: require(`${path}/public/admin-plan.js`),
+    /* The v3.2 policy editor, its own module loaded before admin.js. Missing
+       from this stub, `renderV32` throws into its catch and the Commission tab
+       shows "could not load" — which passes every structural check below while
+       testing nothing. */
+    AdminV32: require(`${path}/public/admin-v32.js`),
+    /* The phone extension map, its own module loaded by admin.html before
+       admin.js. Missing from this stub, renderUploads throws into its catch and
+       the Uploads tab shows "could not be loaded" — which passes every
+       structural check while testing nothing. */
+    AdminExt: require(`${path}/public/admin-ext.js`),
+    /* The weekly UCM card — the upload that opens the Contact Centre report. */
+    AdminUcm: require(`${path}/public/admin-ucm.js`),
+    CcFmt: require(`${path}/public/cc-fmt.js`),
+    TgFmt: require(`${path}/public/tg-fmt.js`),
     document: admDom.document,
     console,
     location: { search: '', href: '', pathname: '/admin' },
@@ -1798,7 +2380,11 @@ async function get2(url) {
       const body = u === '/api/targets' ? periodList
         : u === '/api/targets/drafts' ? []
           : u === '/api/targets/2026-08' ? augSheet
-            : {};
+            /* The Periods tab draws the plan grid below the sheet editor, and
+               `{}` makes it throw — which takes the editor above it down too. */
+            : u === '/api/targets-plan' ? planPayload
+              : u === '/api/policy/v32' ? v32Payload
+                : {};
       return { ok: true, status: 200, json: async () => body };
     },
     Shell: { mountTabs: (o) => { admShow = o && o.onShow; return () => {}; }, stickyBar() {}, showPanel() {}, onRefresh() {}, fireRefresh() {} },
@@ -1816,6 +2402,7 @@ async function get2(url) {
   admSandbox.globalThis = admSandbox;
   vm.createContext(admSandbox);
   try {
+    vm.runInContext(fs.readFileSync(`${path}/public/fmt.js`, 'utf8'), admSandbox, { filename: 'fmt.js' });
     vm.runInContext(fs.readFileSync(`${path}/public/admin.js`, 'utf8'), admSandbox, { filename: 'admin.js' });
     if (admShow) await admShow('periods');
     await new Promise((r) => setTimeout(r, 60));

@@ -36,6 +36,7 @@
    ============================================================ */
 
 const { prisma } = require('./db.js');
+const CC = require('./contact-centre-crm.js');
 const { buildFunnel } = require('./appointments.js');
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -190,9 +191,69 @@ async function phones({ from, to, cov }) {
   };
 }
 
-/** Inbound by hour of day — aggregated over the whole window, so it has no date. */
-async function hours() {
-  const rows = await prisma.pbxHour.findMany({ orderBy: { hour: 'asc' } });
+/**
+ * Inbound by hour of day.
+ *
+ * TWO GRAINS LIVE IN PbxHour AND THEY ARE NOT INTERCHANGEABLE.
+ *
+ * The August seed wrote `date: null` on every hour row: one hour-of-day profile
+ * SUMMED over its whole window (4,183 calls across 1–18 August), not a per-day
+ * series. It cannot be cut to a range. A weekly UCM upload writes one DATED row
+ * per day and hour, which can.
+ *
+ * So an undated row is included only when the asked range touches the window
+ * of the SOURCE that wrote it — not merely any loaded data. Without that, a
+ * September range would quietly add August's entire hourly profile to
+ * September's calls the moment the first weekly upload landed. The payload
+ * says which grain it is answering in (`grain`), and the note says it in words.
+ *
+ * IT USED TO READ THE WHOLE TABLE WITH NO FILTER AND NO preferUpload, while
+ * every other PBX function did both — the double-count preferUpload() exists to
+ * stop. Proven with one upload row beside the seed: it over-counted by exactly
+ * the seed's hour-12 figure, 338.
+ */
+async function hours({ from, to, cov } = {}) {
+  const win = (from && to && cov) ? overlap(from, to, cov) : { any: true, from: null, to: null, full: true, note: null };
+  if (!win.any) {
+    return {
+      window: win, list: [], peak: null, grain: null, coveredBy: null, note: null,
+      outOfHours: { calls: 0, answered: 0, hours: '00:00–08:59 and 22:00–23:59' },
+    };
+  }
+  const raw = await prisma.pbxHour.findMany({ orderBy: { hour: 'asc' } });
+  const spanOf = new Map(((cov && cov.spans) || []).map((sp) => [sp.source, sp]));
+  const touches = (sp) => !!sp && (!win.from || sp.to >= win.from) && (!win.to || sp.from <= win.to);
+  /* The undated profiles this range draws on, and the days each already counts. */
+  const profileSpans = [...new Set(raw.filter((h) => h.date == null).map((h) => h.source))]
+    .map((src) => spanOf.get(src)).filter(touches);
+  const insideProfile = (d) => profileSpans.some((sp) => d >= sp.from && d <= sp.to);
+  const inWindow = raw.filter((h) => {
+    if (h.date == null) return touches(spanOf.get(h.source));
+    const d = ymd(h.date);
+    if (win.from && d < win.from) return false;
+    if (win.to && d > win.to) return false;
+    /* A dated row for a day a whole-window profile ALREADY counts would be
+       added on top of it — the profile cannot be split to take that day out,
+       and preferUpload cannot dedupe them because their keys differ. Inside
+       the profile's window the profile wins; dated rows count everywhere else. */
+    return !insideProfile(d);
+  });
+  const kept = preferUpload(inWindow, (h) => `${h.hour}|${h.date == null ? 'all' : ymd(h.date)}`);
+  const byHour = new Map();
+  for (const h of kept) {
+    if (!byHour.has(h.hour)) byHour.set(h.hour, { hour: h.hour, calls: 0, answered: 0, source: h.source });
+    const e = byHour.get(h.hour);
+    e.calls += h.calls;
+    e.answered += h.answered;
+    if (h.source === 'upload') e.source = 'upload';
+  }
+  const undated = kept.filter((h) => h.date == null);
+  const dated = kept.filter((h) => h.date != null);
+  let grain = 'by-day';
+  if (undated.length && dated.length) grain = 'mixed';
+  else if (undated.length) grain = 'window-total';
+  const seedSpan = undated.length ? spanOf.get(undated[0].source) : null;
+  const rows = [...byHour.values()].sort((a, b) => a.hour - b.hour);
   const list = rows.map((h) => ({ hour: h.hour, calls: h.calls, answered: h.answered, source: h.source }));
   const peak = list.reduce((best, h) => (h.calls > (best ? best.calls : -1) ? h : best), null);
   /* The staffing finding: calls arriving when nobody is on the phones. Computed
@@ -200,8 +261,22 @@ async function hours() {
      where its own hourly rows say 218. */
   const closed = list.filter((h) => h.hour < 9 || h.hour > 21);
   return {
+    window: win,
     list,
     peak,
+    /* Named so the client cannot draw it as "calls on the days you selected"
+       when it is not. */
+    grain,
+    coveredBy: seedSpan ? { from: seedSpan.from, to: seedSpan.to } : null,
+    note: {
+      'by-day': 'Calls by the hour they arrived, summed over the days of this range.',
+      'window-total': `Calls by the hour they arrived, summed over the whole of ${
+        seedSpan ? `${seedSpan.from} → ${seedSpan.to}` : 'the frozen snapshot'} — not the range above. `
+        + 'That export carries one hour-of-day profile for its whole window, which cannot be cut to fewer days.',
+      mixed: `Calls by the hour they arrived. Part of this range is the frozen snapshot, which can only `
+        + `be read whole (${seedSpan ? `${seedSpan.from} → ${seedSpan.to}` : 'its window'}), so those days `
+        + 'count in full whatever the range — the rest are summed day by day.',
+    }[grain],
     outOfHours: {
       calls: closed.reduce((t, h) => t + h.calls, 0),
       answered: closed.reduce((t, h) => t + h.answered, 0),
@@ -249,7 +324,10 @@ async function queues({ from, to, cov, scope = 'all' }) {
       offered,
       answered,
       abandoned: offered - answered,
-      answerRate: offered ? r2(answered / offered) : null,
+      answerRate: offered ? r2((r.answeredOfOffered || 0) / offered) : null,
+      /* Answers from a CDR, where who-it-rang is not recorded. Named so the
+         panel can say why the rate is blank or covers fewer calls. */
+      answersWithoutOffer: r.answersWithoutOffer || 0,
       abandonRate: offered ? r2((offered - answered) / offered) : null,
     };
   }).sort((a, b) => b.offered - a.offered);
@@ -314,6 +392,20 @@ async function queues({ from, to, cov, scope = 'all' }) {
  * the table is still correct — but this function does not rely on that, it
  * filters by date explicitly.
  */
+/**
+ * Do the phone system and the extension map agree about who sits here?
+ *
+ * Compared on the FIRST name only: the CDR writes "Nada" where the map writes
+ * "Nada Nouvelage", and those are the same person. "Rana Magdy" against
+ * "Mariam zat" is not, and that is the case worth catching — one of the two is
+ * out of date and every call on the extension is attributed to a guess.
+ */
+function nameConflict(mapped, cdr) {
+  if (!mapped || !cdr) return false;
+  const first = (s) => String(s).trim().split(/\s+/)[0].toLowerCase();
+  return first(mapped) !== first(cdr);
+}
+
 async function agents({ from, to, cov }) {
   const win = overlap(from, to, cov);
   if (!win.any) {
@@ -324,7 +416,7 @@ async function agents({ from, to, cov }) {
     };
   }
 
-  const [raw, spans] = await Promise.all([
+  const [raw, spans, extMap] = await Promise.all([
     prisma.pbxAgentDay.findMany({
       where: { date: { gte: day(win.from), lte: day(win.to) } },
       select: {
@@ -337,8 +429,13 @@ async function agents({ from, to, cov }) {
       where: { date: null },
       select: { ext: true, agentName: true, daysActive: true, spanMinutes: true },
     }),
+    /* The extension map is why this table can print a name at all. The CDR
+       carries agentName null on every row; the map names all eleven of these
+       extensions, and is editable in Admin because people move desks. */
+    prisma.pbxExtension.findMany(),
   ]);
   const spanBy = new Map(spans.map((s) => [s.ext, s]));
+  const extBy = new Map(extMap.map((e) => [e.ext, e]));
 
   /* Per (extension, day), for the same reason as the queues. */
   const kept = preferUpload(raw, (r) => `${r.ext}|${ymd(r.date)}`);
@@ -354,6 +451,13 @@ async function agents({ from, to, cov }) {
     x.days += 1;
     x.agentName = x.agentName || r.agentName;
     for (const f of ['offered', 'answered', 'talkInSec', 'dials', 'connected', 'talkOutSec']) x[f] += r[f];
+    /* The answers that have a matching "offered" behind them. A weekly UCM CDR
+       says which agent ANSWERED a call but not which agents it rang on the way,
+       so its rows carry offered = 0. Dividing ALL answers by only the offers
+       the August pack recorded would print an agent at 140% the moment a range
+       spans both, so the rate is computed on the rows that can support it. */
+    if (r.offered > 0) x.answeredOfOffered = (x.answeredOfOffered || 0) + r.answered;
+    else if (r.answered > 0) x.answersWithoutOffer = (x.answersWithoutOffer || 0) + r.answered;
   }
 
   const list = [...byExt.values()].map((r) => {
@@ -367,10 +471,29 @@ async function agents({ from, to, cov }) {
     const shiftSec = daysActive * ASSUMED_SHIFT_HOURS * 3600;
     return {
       ext: r.ext,
-      /* Only two of the eleven extensions have a name in the pack. The rest are
-         an extension number, which is honest — inventing "Agent 6003" would
-         read as a name somebody could look up. */
-      name: r.agentName || (sp && sp.agentName) || null,
+      /* THREE NAMES FOR ONE EXTENSION, and they do not always agree.
+         The CDR carries a first name ("Nada"); the extension map carries the
+         name configured on the phone ("Nada Nouvelage"); only the map carries
+         the full Odoo employee, and only for 9 of the 61 extensions. The Odoo
+         name is preferred because it is the one that joins to a person — the
+         other two join to a desk.
+
+         WHERE THEY DISAGREE, SAY SO. Extension 6008 is "Rana Magdy" in the
+         phone export and "Mariam zat" in the map: two different people, and
+         every call on that extension is attributed to whichever one you
+         believe. An unmapped extension stays a number rather than becoming
+         "Agent 6003", which would read as a name somebody could look up. */
+      name: (extBy.get(r.ext) || {}).odooEmployee
+        || (extBy.get(r.ext) || {}).phoneName
+        || r.agentName || (sp && sp.agentName) || null,
+      phoneName: (extBy.get(r.ext) || {}).phoneName || null,
+      cdrName: r.agentName || (sp && sp.agentName) || null,
+      /* Blank on 52 of the 61 extensions, so the column reads "unmapped"
+         rather than empty. */
+      odooEmployee: (extBy.get(r.ext) || {}).odooEmployee || null,
+      nameConflict: nameConflict((extBy.get(r.ext) || {}).phoneName, r.agentName || (sp && sp.agentName)),
+      team: (extBy.get(r.ext) || {}).team || null,
+      branch: (extBy.get(r.ext) || {}).branch || null,
       offered,
       answered,
       answerRate: offered ? r2(answered / offered) : null,
@@ -535,15 +658,27 @@ async function bookings({ from, to, scope = 'all' }) {
 /* ------------------------------------------------------------------ build --- */
 
 /** Everything, for one range and one entity scope. */
-async function build({ from, to, scope = 'all' }) {
-  const cov = await pbxCoverage();
-  const [ph, hr, q, ag, ob, bk] = await Promise.all([
+async function build({ from, to, scope = 'all', today = new Date().toISOString().slice(0, 10) }) {
+  /* Two snapshots, two coverages. The PBX one is 1–18 August; the CRM one is
+     September into early October. They are kept apart deliberately — a single
+     merged window would be wrong for both halves, and this report's whole
+     design is that it says which window each figure belongs to. */
+  const [cov, ccCov, L] = await Promise.all([pbxCoverage(), CC.ccCoverage(), CC.lookups()]);
+  const ctx = { from, to, scope, cov: ccCov, L, today };
+  const [ph, hr, q, ag, ob, bk, sm, cr, ap, pe, tm, br, dq] = await Promise.all([
     phones({ from, to, cov }),
-    hours(),
+    hours({ from, to, cov }),
     queues({ from, to, cov, scope }),
     agents({ from, to, cov }),
     outbound({ from, to, cov }),
     bookings({ from, to, scope }),
+    CC.summary(ctx),
+    CC.crm(ctx),
+    CC.appointments(ctx),
+    CC.people(ctx),
+    CC.timing(ctx),
+    CC.branches(ctx),
+    CC.quality(ctx),
   ]);
 
   /* Bookings per conversation, across the two halves — and only where the two
@@ -574,8 +709,17 @@ async function build({ from, to, scope = 'all' }) {
   }
 
   return {
-    from, to, scope,
+    from, to, scope, today,
     coverage: cov,
+    ccCoverage: ccCov,
+    /* The eight panels, in the order the page draws them. */
+    summary: sm,
+    crm: cr,
+    appointments: ap,
+    people: pe,
+    timing: tm,
+    branches: br,
+    quality: dq,
     phones: ph,
     hours: hr,
     queues: q,
@@ -622,4 +766,6 @@ async function build({ from, to, scope = 'all' }) {
 module.exports = {
   build, pbxCoverage, overlap, phones, hours, queues, agents, outbound, bookings,
   ZAT_QUEUES, ZAT_BRANCHES, ASSUMED_SHIFT_HOURS,
+  /* The people half, re-exported so callers have one module to require. */
+  ...CC,
 };
