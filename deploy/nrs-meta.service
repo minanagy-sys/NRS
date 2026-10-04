@@ -1,0 +1,28 @@
+[Unit]
+# Report 03's own feed. Separate from nrs-sync@.service because it reads a
+# different system (Supermetrics, not the Odoo MCP), has a different failure
+# mode (a metered row allowance, not a token) and must not take the Odoo sync
+# down with it when the licence lapses — it expires 2026-09-17.
+Description=Nouvelage Marketing — Meta and Instagram via Supermetrics
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nrs
+Group=nrs
+WorkingDirectory=/opt/nrs
+EnvironmentFile=/opt/nrs/.env
+# --days 3, not 1. Meta re-attributes results for a day or two after the fact,
+# and the sync replaces a window wholesale rather than topping it up, so a
+# three-day trailing window lets late attribution land. It costs a few hundred
+# rows a night against a 50,000-row month, and scripts/sync-meta.js refuses to
+# run at all once the reserve is reached.
+ExecStart=/usr/bin/node /opt/nrs/scripts/sync-meta.js --days 3 --source api
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/nrs
+
+[Install]
+WantedBy=multi-user.target

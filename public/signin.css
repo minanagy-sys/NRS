@@ -1,0 +1,18 @@
+/* Sign-in page. Kept in a file, not inline: the CSP allows style-src 'self'
+   only, so an inline <style> block is dropped and the page renders bare. */
+
+.signin{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--espresso)}
+.card{background:var(--cream);border-radius:10px;max-width:520px;width:100%;padding:34px 32px;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+.card .brand{font-family:'Cormorant Garamond',serif;font-size:10px;letter-spacing:.35em;text-transform:uppercase;color:var(--taupe);margin-bottom:10px}
+.card h1{font-family:'Cormorant Garamond',serif;font-size:34px;font-weight:500;color:var(--espresso);line-height:1.05;margin-bottom:6px}
+.card h1 em{font-style:italic;color:var(--espresso-light);display:block;font-size:21px;margin-top:3px}
+.card p{font-size:13.5px;color:var(--muted);line-height:1.6;margin-top:14px}
+.card .go{display:inline-flex;align-items:center;gap:8px;background:var(--espresso);color:var(--cream);
+  border:none;border-radius:6px;padding:13px 22px;font-size:12px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;text-decoration:none;margin-top:22px;transition:.15s}
+.card .go:hover{background:var(--espresso-light)}
+.steps{margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.steps li{font-size:12.5px;color:var(--muted);line-height:1.65;margin-bottom:8px;margin-left:18px}
+.steps strong{color:var(--espresso)}
+.note{margin-top:18px;background:var(--espresso-soft);border-left:3px solid var(--taupe);
+  border-radius:4px;padding:11px 13px;font-size:12px;color:var(--ink);line-height:1.6}

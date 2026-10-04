@@ -1,0 +1,132 @@
+/* FINANCE — additions to app.css. Everything else reuses the sales report's
+   shell, tables and accordions so the two pages read as one product. */
+
+/* funds availability cards */
+.fav{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:10px 0 6px}
+.fav-c{background:#fff;border:1px solid var(--line);border-radius:6px;padding:12px 13px;box-shadow:var(--shadow-sm)}
+.fav-c .t{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.fav-c .d{font-size:11.5px;color:var(--taupe);margin:3px 0 7px}
+.fav-c .v{font-family:'Cormorant Garamond',serif;font-size:25px;font-weight:600;color:var(--espresso);line-height:1}
+.fav-c .s{font-size:11px;color:var(--muted);margin-top:3px}
+
+/* explanatory notes: plain, warning, and the two-systems seam */
+.fnote{background:var(--espresso-soft);border-left:3px solid var(--line-strong);padding:9px 12px;
+    border-radius:0 4px 4px 0;font-size:12.5px;color:var(--ink);margin:10px 0;line-height:1.55}
+.fnote.warn{background:rgba(201,138,46,.1);border-left-color:#c98a2e}
+.fnote.seam{background:rgba(176,80,60,.09);border-left-color:#b0503c}
+.fnote a{color:var(--espresso);text-decoration:underline}
+.fnote code{font-family:ui-monospace,monospace;font-size:11.5px;background:#fff;padding:1px 4px;border-radius:3px}
+
+/* month heatmap */
+.heat{overflow-x:auto;padding-bottom:4px}
+.heat-row{display:flex;align-items:stretch;gap:3px;margin-bottom:3px;min-width:640px}
+.heat-y{width:44px;flex:0 0 44px;display:flex;align-items:center;font-size:11px;font-weight:600;color:var(--muted)}
+.heat-c{flex:1;background:#fff;border:1px solid var(--line);border-radius:4px;padding:5px 4px;text-align:center;min-width:44px}
+.heat-c.dead{background:var(--espresso-soft);border-color:transparent}
+.heat-c .m{font-size:9.5px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+.heat-c .b{font-size:11.5px;font-weight:600;color:#b0503c;line-height:1.3}
+.heat-c .p{font-size:11.5px;font-weight:600;color:#5e8d4a;line-height:1.3}
+
+/* verdict badges */
+.vd{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.05em;padding:2px 7px;border-radius:3px;white-space:nowrap}
+.vd.safe{background:rgba(94,141,74,.14);color:#5e8d4a}
+.vd.part_waste{background:rgba(201,138,46,.16);color:#a9721f}
+.vd.all_waste,.vd.expired,.vd.no_move{background:rgba(176,80,60,.14);color:#b0503c}
+.vd.watch{background:var(--espresso-soft);color:var(--muted)}
+.vd.wh_unknown{background:rgba(88,56,44,.1);color:var(--muted);font-style:italic}
+.thin{color:#c98a2e;font-weight:600}
+
+/* shared cell colours */
+.ltab td.n.neg,.ltab .neg{color:#b0503c}
+.ltab td.n.z,.ltab .z{color:var(--taupe)}
+.ltab .r{color:#b0503c}.ltab .a{color:#c08a2e}.ltab .g{color:#5e8d4a}
+.ltab td.n.pk,.ltab .pk{color:#8a6e63}
+.pkl{display:block;font-size:10px;color:#8a6e63;font-weight:500}
+.ltab tr.tot td{background:var(--cream);font-weight:600;border-top:1px solid var(--line-strong)}
+.kpi-value.sm.r{color:#b0503c}.kpi-value.sm.a{color:#c08a2e}
+.rangeline{padding:9px 18px;font-size:11.5px;color:var(--muted);background:#fff;border-bottom:1px solid var(--line)}
+
+/* Day × register grid — banded by funds availability, like the source report */
+.ltab thead tr.cgrp th{
+    background:var(--cream);color:var(--espresso);font-size:9.5px;letter-spacing:.14em;
+    text-transform:uppercase;text-align:center;padding:7px 10px 6px;font-weight:700;
+    border-bottom:2px solid var(--taupe);
+}
+.ltab thead tr.cgrp th.blank{background:transparent;border-bottom:none}
+.ltab th.st,.ltab td.st{background:var(--espresso-soft)}
+.ltab tr.tot td.st{background:rgba(88,56,44,.13)}
+.rfl{display:block;font-size:10px;color:#b0503c;font-weight:600;white-space:nowrap}
+
+/* A day row opens onto the branches behind it */
+.dayrow{cursor:pointer;user-select:none}
+.dayrow:hover,.dayrow.open{background:var(--cream)}
+.dayrow .car{color:var(--taupe);font-size:10px;display:inline-block;transition:transform .18s;margin-right:2px}
+.dayrow.open .car{transform:rotate(90deg)}
+tr.drill > td{padding:0;background:var(--espresso-soft);border-bottom:1px solid var(--line-strong)}
+.drillbox{padding:10px 14px 14px}
+.drillbox .tw{background:#fff;border:1px solid var(--line);border-radius:6px}
+.drillbox table.ltab{margin:0}
+
+/* Product reconciliation — a product opens onto its branches */
+.prodrow{cursor:pointer;user-select:none}
+.prodrow:hover,.prodrow.open{background:var(--cream)}
+.prodrow .car{color:var(--taupe);font-size:10px;display:inline-block;transition:transform .18s;margin-right:2px}
+.prodrow.open .car{transform:rotate(90deg)}
+.sm2.inv{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;opacity:.75}
+.branchcell{padding-left:22px!important;position:relative;font-weight:500}
+.branchcell::before{content:'└';position:absolute;left:8px;color:var(--taupe);font-weight:400}
+
+/* The gap, as a pill: red means invoiced without issuing, green the other way */
+.gp{display:inline-block;min-width:46px;text-align:center;font-size:11px;font-weight:700;
+    padding:2px 8px;border-radius:11px;font-variant-numeric:tabular-nums}
+.gp.pos{background:rgba(176,80,60,.13);color:#b0503c}
+.gp.neg{background:rgba(94,141,74,.16);color:#4f7a3e}
+.gp.zero{background:var(--espresso-soft);color:var(--muted)}
+
+/* EXPIRY — filter bar, buckets, drill tables */
+.fbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;margin:12px 0;box-shadow:var(--shadow-sm)}
+.fbar .lbl{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-right:2px}
+.fbar .lbl:not(:first-child){margin-left:8px}
+.fbar button{background:transparent;border:1px solid var(--line-strong);color:var(--espresso);
+    border-radius:5px;padding:5px 10px;font-size:11.5px;font-weight:600;transition:.14s;font-family:inherit}
+.fbar button:hover{background:var(--cream)}
+.fbar button.on{background:var(--espresso);border-color:var(--espresso);color:var(--cream)}
+.fbar input[type=search]{flex:1 1 180px;min-width:150px;font-family:inherit;font-size:12.5px;padding:6px 9px;
+    border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:var(--ink)}
+.fbar .cnt{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* six KPIs rather than four */
+.kpi-grid.six{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi.bad{border-left:3px solid #b0503c}
+.kpi.warn{border-left:3px solid #c98a2e}
+.kpi.unk{border-left:3px solid var(--taupe)}
+
+/* bucket badges and the stacked bar, in the source report's own palette */
+.bg{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;
+    border-radius:3px;color:#fff;white-space:nowrap}
+.bg.expired{background:#8C2F1D}.bg.d30{background:#B04A2F}.bg.d60{background:#C77A3C}
+.bg.d90{background:#B08D45}.bg.d180{background:#7A8F5C}.bg.safe{background:#3E5F52}
+.bg.unk{background:var(--espresso-soft);color:var(--muted);font-style:italic}
+.stack{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--espresso-soft);margin:4px 0 12px}
+.stack i{display:block;height:100%}
+.stack i.expired{background:#8C2F1D}.stack i.d30{background:#B04A2F}.stack i.d60{background:#C77A3C}
+.stack i.d90{background:#B08D45}.stack i.d180{background:#7A8F5C}.stack i.safe{background:#3E5F52}
+
+/* at-risk money reads red unless it is nothing */
+.ltab .rv{color:#b0503c;font-weight:600}
+.ltab .rv.z{color:var(--taupe);font-weight:400}
+
+/* clickable group rows and their drill-downs */
+.ltab tr.clk{cursor:pointer;user-select:none}
+.ltab tr.clk:hover,.ltab tr.clk.open{background:var(--cream)}
+.ltab tr.clk .car{color:var(--taupe);font-size:10px;display:inline-block;transition:transform .18s;margin-right:2px}
+.ltab tr.clk.open .car{transform:rotate(90deg)}
+.ltab tr.subhead td{background:var(--espresso-soft);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted);font-weight:700;padding:6px 12px}
+.ltab tr.sub td{background:#fdfaf7;font-size:12.5px}
+.ltab tr.sub td:first-child{padding-left:24px}
+.xempty{text-align:center;color:var(--muted);font-size:12.5px;padding:18px 12px!important}
+.ltab td.act{white-space:normal;font-size:12px;color:var(--muted);min-width:180px}
+.sm2.thin{color:#c98a2e;font-weight:600}
+.subtitle .hint{font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;text-transform:none;margin-left:6px}

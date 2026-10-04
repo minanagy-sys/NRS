@@ -1,0 +1,36 @@
+[Unit]
+Description=Nouvelage Daily Sales
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nrs
+Group=nrs
+WorkingDirectory=/opt/nrs
+EnvironmentFile=/opt/nrs/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+
+# The app needs to read its own directory and talk to Postgres and the MCP.
+# Nothing else, so nothing else is permitted.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/nrs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+# MemoryDenyWriteExecute is deliberately NOT set. V8 compiles JavaScript to
+# machine code at runtime, so it must map memory writable and then executable;
+# denying that makes node abort on startup with a V8 fatal error and ENOMEM
+# (Check failed: 12 == errno, inside SetPermissionsOnExecutableMemoryChunk).
+# It cannot be used with any JIT runtime.
+
+[Install]
+WantedBy=multi-user.target

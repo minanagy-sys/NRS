@@ -1,0 +1,1730 @@
+// Nouvelage daily sales — schema.
+//
+// Two halves. `Invoice`/`InvoiceLine`/`StockQuant` mirror what the MCP returns so
+// every report cut is a SQL GROUP BY instead of pulling thousands of rows per
+// page load. `TargetPeriod` and friends hold the Approved Target Schedule, which
+// has no equivalent in Odoo at all.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// A posted customer invoice. `odooId` is the natural key — syncs upsert on it.
+model Invoice {
+  odooId         Int      @id
+  name           String
+  invoiceDate    DateTime @db.Date
+  moveType       String // out_invoice | out_refund
+  state          String
+  branchId       Int?
+  branchName     String?
+  specialistId   Int?
+  specialistName String?
+  partnerId      Int?
+  partnerName    String?
+  amountUntaxed  Decimal  @db.Decimal(14, 2)
+  amountTotal    Decimal  @db.Decimal(14, 2)
+  isNewCustomer  Boolean  @default(false)
+  /// The Odoo sales journal. Stored because "Package sale journal" is a different
+  /// kind of money from the branch journals: packages are invoiced when the
+  /// package is SOLD, carry no VAT at all, and are 7.1% of August revenue. Any
+  /// report that wants revenue comparable to collections has to be able to
+  /// exclude them, and that is impossible without the journal on the row.
+  /// Nullable because every invoice synced before 2026-09-01 has none until a
+  /// re-sync backfills it — null means "not yet known", never "no journal".
+  journalId      Int?
+  journalName    String?
+  pulledAt       DateTime @default(now())
+
+  lines InvoiceLine[]
+
+  @@index([invoiceDate])
+  @@index([invoiceDate, moveType])
+  @@index([branchId])
+  @@index([specialistId])
+  @@index([journalName])
+}
+
+model InvoiceLine {
+  odooId        Int     @id
+  invoiceOdooId Int
+  productId     Int?
+  productName   String?
+  categoryId    Int?
+  categoryName  String?
+  quantity      Decimal @db.Decimal(14, 3)
+  priceSubtotal Decimal @db.Decimal(14, 2)
+  priceTotal    Decimal @db.Decimal(14, 2)
+
+  invoice Invoice @relation(fields: [invoiceOdooId], references: [odooId], onDelete: Cascade)
+
+  @@index([invoiceOdooId])
+  @@index([productId])
+}
+
+/// Stock on hand, per product per location, as of one snapshot.
+model StockQuant {
+  id           Int      @id @default(autoincrement())
+  takenAt      DateTime
+  productId    Int
+  productName  String
+  categoryName String?
+  uom          String?
+  locationId   Int
+  locationName String
+  quantity     Decimal  @db.Decimal(14, 3)
+  reserved     Decimal  @default(0) @db.Decimal(14, 3)
+
+  @@unique([takenAt, productId, locationId])
+  @@index([takenAt])
+}
+
+/// One sync attempt. Failures are recorded rather than leaving a half-filled window.
+model SyncRun {
+  id         Int       @id @default(autoincrement())
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  fromDate   DateTime  @db.Date
+  toDate     DateTime  @db.Date
+  trigger    String // cron | manual | backfill
+  actor      String?
+  status     String    @default("running") // running | ok | failed
+  invoices   Int       @default(0)
+  lines      Int       @default(0)
+  error      String?
+
+  @@index([startedAt])
+}
+
+/// One row per day per pull, so "how much did today move after we first looked"
+/// becomes tracked history instead of a hand-written note in the report.
+model DaySnapshot {
+  id            Int      @id @default(autoincrement())
+  date          DateTime @db.Date
+  pulledAt      DateTime @default(now())
+  invoices      Int
+  amountUntaxed Decimal  @db.Decimal(14, 2)
+  amountTotal   Decimal  @db.Decimal(14, 2)
+
+  @@index([date])
+}
+
+/// The Approved Target Schedule for one month.
+/// A target sheet somebody is still working on.
+///
+/// `TargetPeriod` only exists once a sheet is PUBLISHED — publishing replaces a
+/// whole month and changes what every pace bar on two reports means, so it is
+/// deliberately not a thing you drift into. That left no way to start a month,
+/// walk away, and come back: the carried roster lived in the browser and died
+/// with the tab. Seventy-three numbers is not one sitting.
+///
+/// One row per period. Saving again replaces it; publishing deletes it, because
+/// a draft that outlives its own sheet is the next thing somebody edits by
+/// mistake.
+model TargetDraft {
+  id      Int      @id @default(autoincrement())
+  period  String   @unique // "2026-09"
+  /// The editor's own draft shape, stored whole: groups, doctors, branches and
+  /// the `needsTarget` flags. Kept as JSON rather than shredded into tables
+  /// because it is a work-in-progress, not a fact — nothing reads it but the
+  /// editor, and giving it the published schema would invite something to.
+  payload Json
+  savedAt DateTime @updatedAt
+  actor   String?
+  note    String?
+}
+
+model TargetPeriod {
+  id           Int      @id @default(autoincrement())
+  period       String   @unique // "2026-08"
+  daysInPeriod Int
+  sourceLabel  String?
+  publishedAt  DateTime @default(now())
+
+  doctorTargets DoctorTarget[]
+  branchTargets BranchTarget[]
+  groups        TargetGroup[]
+}
+
+/// Group totals are authoritative. `unlistedTarget` carries the roster members who
+/// have no sales, so a group total always equals its doctors plus that figure —
+/// the original report rendered only the doctors and could never cross-foot.
+model TargetGroup {
+  id             Int     @id @default(autoincrement())
+  periodId       Int
+  name           String
+  target         Decimal @db.Decimal(14, 2)
+  rosterCount    Int
+  unlistedCount  Int     @default(0)
+  unlistedTarget Decimal @default(0) @db.Decimal(14, 2)
+
+  period TargetPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([periodId, name])
+}
+
+model DoctorTarget {
+  id            Int      @id @default(autoincrement())
+  periodId      Int
+  scheduleName  String
+  groupName     String?
+  monthlyTarget Decimal  @db.Decimal(14, 2)
+  prevMonth     Decimal? @db.Decimal(14, 2)
+  hasSales      Boolean  @default(true)
+
+  period TargetPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([periodId, scheduleName])
+}
+
+model BranchTarget {
+  id           Int      @id @default(autoincrement())
+  periodId     Int
+  scheduleName String
+  target1      Decimal  @db.Decimal(14, 2)
+  target2      Decimal? @db.Decimal(14, 2)
+
+  period TargetPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([periodId, scheduleName])
+}
+
+/// Sheet name -> Odoo name. Replaces fuzzy matching: "Dr.Merna Masoud" and
+/// "Dr.Merna Ashraf" are one edit apart but different people.
+model IdentityAlias {
+  id           Int    @id @default(autoincrement())
+  kind         String // doctor | branch
+  scheduleName String
+  odooName     String
+  odooId       Int?
+
+  @@unique([kind, scheduleName])
+}
+
+/// A signed-in user. The MCP token is encrypted at rest and never leaves the server.
+model Session {
+  id             String   @id
+  subject        String
+  displayName    String?
+  tokenCipher    String
+  tokenExpiresAt DateTime
+  createdAt      DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  expiresAt      DateTime
+  /// Set once this session has entered ADMIN_PASSPHRASE. Read access never needs it.
+  canWrite       Boolean  @default(false)
+
+  @@index([expiresAt])
+}
+
+/// Pending OAuth handshake: PKCE verifier + client id, held between the redirect out
+/// and the callback back.
+model AuthRequest {
+  state     String   @id
+  verifier  String
+  clientId  String
+  createdAt DateTime @default(now())
+  redirect  String?
+}
+
+/// Who did what. Sign-ins, refreshes and every target edit.
+model AuditEvent {
+  id     Int      @id @default(autoincrement())
+  at     DateTime @default(now())
+  actor  String?
+  action String
+  detail String?
+  ip     String?
+
+  @@index([at])
+}
+
+/**
+ * ============================================================
+ * FINANCE — collections, payables, sold-vs-issued, expiry risk.
+ * Every fact carries `source`. The historical payables data does not exist in
+ * Odoo 18 at all (it went live 1 Aug 2026 and the Jan–Jul backfill was never
+ * loaded), so it arrives as an imported snapshot and stays one; the other three
+ * sections can switch to a live sync without a schema change.
+ * Values that depend on when you look — days to expiry, cover, the verdict,
+ * buckets — are deliberately NOT stored. They come from lib/finance-rules.js at
+ * read time, or the report would keep asserting last month's answer.
+ * ============================================================
+ */
+
+/// Which source each finance section reads. One row per section.
+model FinanceSource {
+  section   String    @id // collections | payables | recon | expiry
+  mode      String    @default("snapshot") // snapshot | odoo | stitched
+  /// `stitched` only: Odoo owns this date onward, the snapshot everything before.
+  cutover   DateTime? @db.Date
+  updatedAt DateTime  @updatedAt
+}
+
+/// One load of one section, so a figure can always be traced to where it came from.
+model FinanceBatch {
+  id         Int      @id @default(autoincrement())
+  section    String
+  source     String // snapshot | odoo
+  /// The date the data speaks as of — expiry day counts are measured from this.
+  asOf       DateTime @db.Date
+  importedAt DateTime @default(now())
+  rowCount   Int      @default(0)
+  label      String?
+
+  @@index([section, source])
+}
+
+/// Customer receipts, net of refunds, per day per branch per register.
+model Collection {
+  id           Int      @id @default(autoincrement())
+  date         DateTime @db.Date
+  branch       String
+  register     String
+  gross        Decimal  @db.Decimal(14, 2)
+  refunds      Decimal  @default(0) @db.Decimal(14, 2)
+  net          Decimal  @db.Decimal(14, 2)
+  /// The share of `net` settled against package-sale invoices, not an addition to it.
+  packageShare Decimal  @default(0) @db.Decimal(14, 2)
+  txns         Int      @default(0)
+  source       String
+
+  @@unique([source, date, branch, register])
+  @@index([source, date])
+}
+
+/// Registers and when their money is actually usable. Seeded from finance-rules.
+model Register {
+  name         String  @id
+  /// t0 | t1 | settlement, or null for one nobody has classified yet.
+  availability String?
+  sortOrder    Int     @default(0)
+}
+
+model Supplier {
+  name     String  @id
+  /// supplies | assets | services — a manual classification, not an Odoo field.
+  category String?
+  /// Ledger balances as extracted. `closing` is NOT opening + bills − payments:
+  /// 60 of 154 suppliers break that identity by 21.1 M in aggregate. Never compute it.
+  opening  Decimal @default(0) @db.Decimal(14, 2)
+  closing  Decimal @default(0) @db.Decimal(14, 2)
+  source   String
+
+  bills    Bill[]
+  payments VendorPayment[]
+}
+
+model Bill {
+  id           Int      @id @default(autoincrement())
+  /// The document number, e.g. BILL/2026/0439. Not unique across sources.
+  ref          String
+  supplierName String
+  date         DateTime @db.Date
+  gross        Decimal  @db.Decimal(14, 2) // inc-VAT
+  net          Decimal  @db.Decimal(14, 2) // ex-VAT
+  vat          Decimal  @default(0) @db.Decimal(14, 2)
+  branch       String?
+  /// Which system this bill was extracted from: csv | live (Odoo 13) | odoo18.
+  srcSystem    String?
+  source       String
+
+  supplier Supplier   @relation(fields: [supplierName], references: [name], onDelete: Cascade)
+  lines    BillLine[]
+
+  @@unique([source, ref, supplierName])
+  @@index([source, date])
+  @@index([supplierName])
+}
+
+model BillLine {
+  id        Int     @id @default(autoincrement())
+  billId    Int
+  product   String
+  category  String?
+  qty       Decimal @db.Decimal(14, 3)
+  unitPrice Decimal @default(0) @db.Decimal(14, 2)
+  subtotal  Decimal @default(0) @db.Decimal(14, 2) // ex-VAT
+  /// Free goods: quantity with no money. Stored because the source states it,
+  /// and cross-checked on import against finance-rules.isBonusLine.
+  isBonus   Boolean @default(false)
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@index([product])
+}
+
+model VendorPayment {
+  id           Int      @id @default(autoincrement())
+  supplierName String
+  date         DateTime @db.Date
+  amount       Decimal  @db.Decimal(14, 2) // always positive; the minus is presentation
+  journal      String
+  /// Usually the bill it settles, but free text — not a reliable reference.
+  ref          String?
+  /// Derived from the journal name, not an Odoo field. See JournalMethod.
+  method       String?
+  source       String
+
+  supplier Supplier @relation(fields: [supplierName], references: [name], onDelete: Cascade)
+
+  @@index([source, date])
+  @@index([supplierName])
+}
+
+/// journal name -> payment method. Config, editable without a deploy, because
+/// the mapping is a naming heuristic that will drift as journals are added.
+model JournalMethod {
+  journal String @id
+  method  String
+}
+
+/// A sellable product paired with its `INV` stock twin, where one exists.
+model ReconProduct {
+  id        Int     @id @default(autoincrement())
+  /// What to show: the sellable name for a pair, the stock item name when there
+  /// is no twin. Carried explicitly so the unique key never depends on a NULL,
+  /// which Postgres treats as distinct from every other NULL.
+  label     String
+  soldName  String?
+  /// Null side means no twin exists: real consumption billed inside a treatment
+  /// price, invisible to the reconciliation, so it is reported apart from the gap.
+  stockName String?
+  /// Weighted unit cost. Four decimals: the source carries 1000.0728.
+  unitCost  Decimal @db.Decimal(14, 4)
+  matched   Boolean @default(true)
+  source    String
+
+  facts ReconFact[]
+
+  @@unique([source, label])
+  @@index([source])
+}
+
+model ReconFact {
+  id             Int      @id @default(autoincrement())
+  reconProductId Int
+  branch         String
+  date           DateTime @db.Date
+  /// sold | issued | returned. Returns are their own rows, never negative issues.
+  kind           String
+  qty            Decimal  @db.Decimal(14, 3)
+  /// Only `sold` carries a value (ex-VAT invoiced). Issued and returned are
+  /// costed from unitCost at read time.
+  value          Decimal? @db.Decimal(14, 2)
+
+  product ReconProduct @relation(fields: [reconProductId], references: [id], onDelete: Cascade)
+
+  @@unique([reconProductId, branch, date, kind])
+  @@index([reconProductId])
+  @@index([date])
+}
+
+/// Lot-tracked stock on hand. One row per location × product × lot — verified
+/// unique across all 625 rows of the source.
+model ExpiryLot {
+  id           Int      @id @default(autoincrement())
+  location     String
+  isWarehouse  Boolean  @default(false)
+  product      String
+  lot          String
+  expiry       DateTime @db.Date
+  qty          Decimal  @db.Decimal(14, 3)
+  value        Decimal  @db.Decimal(14, 2) // at cost
+  unitCost     Decimal  @db.Decimal(14, 2)
+  /// Monthly consumption rate at THIS location. Null means none can be
+  /// calculated — the warehouses, whose transfers to branches are not posted in
+  /// Odoo. Must stay nullable: zero would fabricate a forecast.
+  rateMonthly  Decimal? @db.Decimal(14, 4)
+  /// Company-wide monthly rate for the product. Constant per product in the
+  /// source; kept per row so a lot is readable on its own.
+  companyRate  Decimal? @db.Decimal(14, 4)
+  /// Fewer than three net units issued in the measurement window, so the rate is
+  /// a guess dressed as a number. A property of the window it was measured in,
+  /// not of today, which is why this one IS stored while the verdict is not.
+  thinMovement Boolean  @default(false)
+  source       String
+
+  @@unique([source, location, product, lot])
+  @@index([source, expiry])
+  @@index([product])
+}
+
+/// The published company daily summary. Its own grain, because the transaction
+/// count exists per day only — there is no per-register breakdown of it — and
+/// because it is the figure the branch×register rows are cross-checked against.
+model CollectionDay {
+  id           Int      @id @default(autoincrement())
+  date         DateTime @db.Date
+  gross        Decimal  @db.Decimal(14, 2)
+  refunds      Decimal  @default(0) @db.Decimal(14, 2)
+  net          Decimal  @db.Decimal(14, 2)
+  packageShare Decimal  @default(0) @db.Decimal(14, 2)
+  txns         Int      @default(0)
+  source       String
+
+  @@unique([source, date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Commission Policy 2026 v2.7 — Nouvelage_Commission_Policy_2026_v2.7.xlsx
+//
+// Every table here is a FACT table fed by the workbook. Nothing derived is
+// stored: achievement %, tier, pool, multipliers and gates are all computed at
+// read time by src/lib/commission-rules.js, the same discipline the expiry
+// verdicts follow — a stored pool would rot the moment a target was edited.
+//
+// The policy's own numbers are editable because Mina asked for exactly that:
+// the target, the 80/90 bands, the departments, the branches, and which entity
+// owns a branch (Nouvel Age or ZAT).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sheet 01 — global parameters. Key/value so a new knob does not need a migration.
+model CommissionPolicy {
+  key       String   @id
+  value     String
+  type      String // string | float | pct | int | bool | date | formula | EGP | mult
+  note      String?
+  updatedAt DateTime @updatedAt
+}
+
+/// Sheet 04 + 14 — the branch master. `entity` is the owning company
+/// (Nouvel Age | ZAT) and `area` drives the Area Manager gate.
+model CommissionBranch {
+  id           Int      @id @default(autoincrement())
+  name         String   @unique
+  area         String
+  entity       String
+  journalCode  String?
+  annualTarget Decimal  @db.Decimal(14, 2)
+  sortOrder    Int      @default(0)
+  active       Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  targets CommissionTarget[]
+  splits  CommissionSplit[]
+}
+
+/// Sheet 05 + 08 — service categories (الأقسام) and their bonus multipliers.
+/// `multiplier` is null for a category the policy attaches no bonus to.
+model CommissionDepartment {
+  id         Int      @id @default(autoincrement())
+  key        String   @unique
+  label      String
+  multiplier Decimal? @db.Decimal(6, 3)
+  mixFloor   Decimal? @db.Decimal(6, 4)
+  mixCap     Decimal? @db.Decimal(6, 4)
+  groupMix   Decimal? @db.Decimal(6, 4)
+  condition  String?
+  sortOrder  Int      @default(0)
+  active     Boolean  @default(true)
+
+  splits CommissionSplit[]
+}
+
+/// Sheet 06/07 — the 11 x 12 grid. floorPct/midPct/maxPct are per-branch-per-month
+/// OVERRIDES of the global bands; null means "use the policy default", which is
+/// why they must stay nullable rather than defaulting to 0.8/0.9/1.0.
+model CommissionTarget {
+  id        Int      @id @default(autoincrement())
+  branchId  Int
+  year      Int
+  month     Int
+  target    Decimal  @db.Decimal(14, 2)
+  floorPct  Decimal? @db.Decimal(6, 4)
+  midPct    Decimal? @db.Decimal(6, 4)
+  maxPct    Decimal? @db.Decimal(6, 4)
+  note      String?
+  updatedAt DateTime @updatedAt
+
+  branch CommissionBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, year, month])
+  @@index([year, month])
+}
+
+/// Sheet 05 — annual target split per branch per department.
+model CommissionSplit {
+  id           Int      @id @default(autoincrement())
+  branchId     Int
+  departmentId Int
+  year         Int
+  annualTarget Decimal  @db.Decimal(14, 2)
+  updatedAt    DateTime @updatedAt
+
+  branch     CommissionBranch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  department CommissionDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, departmentId, year])
+}
+
+/// Sheet 02 — the 14-tier ladder. `revTo` null = the open-ended top tier.
+/// The three min/max pairs are the source's own field names; the pool is their sum.
+model CommissionTier {
+  tierNo    Int      @id
+  label     String
+  revFrom   Decimal  @db.Decimal(14, 2)
+  revTo     Decimal? @db.Decimal(14, 2)
+  recepMin  Decimal  @db.Decimal(12, 2)
+  recepMax  Decimal  @db.Decimal(12, 2)
+  seniorMin Decimal  @db.Decimal(12, 2)
+  seniorMax Decimal  @db.Decimal(12, 2)
+  girlMin   Decimal  @db.Decimal(12, 2)
+  girlMax   Decimal  @db.Decimal(12, 2)
+  updatedAt DateTime @updatedAt
+}
+
+/// Sheet 03 — how a branch pool splits across the 5-person team.
+model CommissionRole {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  sharePct  Decimal  @db.Decimal(6, 4)
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+/// Sheet 09 — call centre per-patient bonus buckets.
+model CallCenterRate {
+  id          Int      @id @default(autoincrement())
+  bucket      String   @unique
+  windowLabel String?
+  bonus       Decimal  @db.Decimal(10, 2)
+  note        String?
+  sortOrder   Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+/// Sheet 10 — the named team. Bonus scheme differs by role.
+model CallCenterMember {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  role      String
+  serves    String?
+  scheme    String?
+  status    String   @default("Active")
+  updatedAt DateTime @updatedAt
+}
+
+/// Sheet 11 — show-rate KPI. Highest band wins, never cumulative.
+model ShowRateBand {
+  id        Int      @id @default(autoincrement())
+  label     String
+  threshold Decimal  @db.Decimal(6, 4)
+  bonus     Decimal  @db.Decimal(12, 2)
+  updatedAt DateTime @updatedAt
+
+  @@unique([threshold])
+}
+
+/// Sheet 12 — the management layer. A gate that fails pays zero regardless of
+/// how well individual branches did.
+model ManagementGate {
+  id          Int      @id @default(autoincrement())
+  role        String   @unique
+  headcount   Int
+  rate        Decimal  @db.Decimal(6, 4)
+  base        String
+  minBranches Int?
+  groupPct    Decimal? @db.Decimal(6, 4)
+  scope       String? // area | group
+  gateLabel   String?
+  gateLogic   String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Sheet 13 — refund, clawback and eligibility rules. Prose the engine must
+/// honour; kept as data so the UI can show it beside the numbers it governs.
+model CommissionRule {
+  id        Int     @id @default(autoincrement())
+  kind      String // refund | eligibility | timing | governance
+  subject   String
+  treatment String
+  affects   String?
+  sortOrder Int     @default(0)
+}
+
+/// Sheets 15 + 16 — the workbook's own test cases and its unresolved conflicts.
+/// The open questions include 3 BLOCKERs, so they are surfaced in the UI rather
+/// than left in a spreadsheet nobody opens.
+model CommissionNote {
+  id         Int      @id @default(autoincrement())
+  kind       String // test | question
+  ref        String // T1.. or 1..17
+  severity   String? // BLOCKER | HIGH | MEDIUM | LOW
+  title      String
+  detail     String?
+  expected   String?
+  resolution String?
+  resolved   Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([kind, ref])
+}
+
+/// Commission policy by effective date, so more than one version can be true.
+///
+/// v2.8 changes exactly one provision of v2.7 — branch-pool eligibility rises
+/// from 80% to 90% of monthly target — and was applied retroactively from June
+/// 2026. Everything else is identical: the 14-tier ladder, the 30/20/20/15/15
+/// split, the three service multipliers and their 1.60x cap, the call-centre
+/// tiers and the management gates.
+///
+/// Storing it as a row per version rather than editing CommissionPolicy in place
+/// is what lets August be scored on the policy actually in force while June and
+/// July keep the answer they were paid on. Overwriting the floor would silently
+/// restate months already settled: under v2.8 a branch that landed at 85% earned
+/// nothing, where under v2.7 it earned the Min pool.
+model CommissionPolicyVersion {
+  version          String   @id
+  effectiveFrom    DateTime @db.Date
+  achievementFloor Decimal  @db.Decimal(6, 4)
+  midFrom          Decimal  @db.Decimal(6, 4)
+  maxFrom          Decimal  @db.Decimal(6, 4)
+  /// What changed relative to the previous version, in one line, for the UI.
+  note             String?
+  updatedAt        DateTime @updatedAt
+
+  @@index([effectiveFrom])
+}
+
+/// One row per Odoo appointment.
+///
+/// This is the middle of the commercial funnel, and until it was synced the show
+/// rate could not be computed at all — report 05 said "attendance join not
+/// pulled" and report 06 listed the appointment model as an open question. It is
+/// `appointment`, it holds 47,912 records, and `states` is the field everything
+/// turns on:
+///
+///   attended  done · done_with_due · payment_received · checked_in · in_process
+///   open      pending · confirm · assessment · waiting ·
+///             waiting_for_advance_payment · discount_approval
+///   lost      cancel · rescheduled
+///
+/// `pending` is the one that matters commercially: 1,773 of 7,655 bookings in
+/// 1-19 Aug have no outcome recorded, which removes 23% of the month from every
+/// attendance measure — including the one the team is paid on. Stored as its own
+/// state rather than folded into "not attended", because an appointment nobody
+/// closed is a data-entry gap, not a patient who failed to turn up.
+model Appointment {
+  odooId         Int       @id
+  name           String?
+  date           DateTime  @db.Date
+  states         String
+  cancelReason   String?
+  branchId       Int?
+  branchName     String?
+  specialistId   Int?
+  specialistName String?
+  partnerId      Int?
+  partnerName    String?
+  /// Who created the booking. Every call-centre booking carries one shared login,
+  /// so this identifies the DESK, never a person — which is exactly why the
+  /// policy's per-agent reactivation bonus cannot be derived yet.
+  createUid      Int?
+  createdBy      String?
+  createdAt      DateTime?
+  /// Normalised to the last ten digits — the only key that joins a booking to a
+  /// lead or a call. Never displayed in full; see src/lib/patients.js.
+  mobileKey      String?
+  invoiceTotal   Decimal?  @db.Decimal(14, 2)
+  dueAmount      Decimal?  @db.Decimal(14, 2)
+  isRescheduled  Boolean   @default(false)
+  /// Service categories booked, from `category_ids`. An EMPTY array means Odoo
+  /// holds none, which is not rare and is not the same as "no service": 36% of
+  /// unresolved bookings have none, against 0% of attended ones. Any split by
+  /// service has to report that share rather than divide it away.
+  categories     String[]
+  hasLaser       Boolean   @default(false)
+  pulledAt       DateTime  @default(now())
+
+  @@index([date])
+  @@index([date, states])
+  @@index([branchName])
+  @@index([specialistName])
+  @@index([mobileKey])
+}
+
+/**
+ * ============================================================
+ * REPORTS 02 AND 03 — Meta, Instagram, and the contact centre.
+ * Every table here carries `source` and `loadedAt`, which the other report
+ * tables do not need because Odoo is their only origin. These have three
+ * possible origins and the reader has to be able to tell them apart:
+ * live     pulled from Supermetrics by scripts/sync-meta.js
+ * seed     imported from the frozen 1-19 Aug HTML packs, because the source
+ * is a file nobody has sent yet
+ * upload   replaced from a file somebody uploaded in Admin
+ * A figure whose provenance is invisible is a figure nobody can challenge, and
+ * these reports will spend months mixing all three.
+ * ============================================================
+ */
+
+/// One row per ad account per day. The grain report 03's date filter needs:
+/// its "days with delivery" figure counts days where cost > 0, and the Doctors
+/// account bought its whole month in 10 of 19 days.
+model MetaDay {
+  id               Int      @id @default(autoincrement())
+  accountId        String
+  accountName      String
+  date             DateTime @db.Date
+  cost             Decimal  @db.Decimal(14, 2)
+  impressions      Int      @default(0)
+  reach            Int      @default(0)
+  clicks           Int      @default(0)
+  /// Meta's two lead shapes, kept apart. Report 03's "results" is their SUM
+  /// (2,239 messaging contacts + 2,326 on-Facebook leads = 4,565) and summing
+  /// them at read time is the only way both the total and the split stay true.
+  msgConversations Int      @default(0)
+  onFbLeads        Int      @default(0)
+  source           String   @default("live")
+  loadedAt         DateTime @default(now())
+
+  @@unique([accountId, date, source])
+  @@index([date])
+  @@index([accountId, date])
+}
+
+model MetaCampaign {
+  id               Int       @id @default(autoincrement())
+  campaignId       String?
+  accountId        String
+  accountKey       String
+  name             String
+  objective        String?
+  /// The DAY this row's metrics belong to. Campaign rows are stored per-day, not
+  /// as a roll-up of whatever window happened to be pulled: the reports have to
+  /// answer any range the reader picks, and a row that means "1–19 August" can
+  /// never be re-cut into 1–10. Nullable only because seeded rows imported from
+  /// the frozen HTML pack genuinely are window roll-ups and cannot claim a day.
+  date             DateTime? @db.Date
+  startDate        DateTime? @db.Date
+  budgetDaily      Decimal?  @db.Decimal(14, 2)
+  cost             Decimal   @db.Decimal(14, 2)
+  impressions      Int       @default(0)
+  clicks           Int       @default(0)
+  msgConversations Int       @default(0)
+  onFbLeads        Int       @default(0)
+  /// Parsed out of `name` by src/lib/meta-parse.js — an inference, never a fact,
+  /// which is why each is nullable and why the parser has its own test file.
+  doctor           String?
+  service          String?
+  branch           String?
+  source           String    @default("live")
+  loadedAt         DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([doctor])
+  @@index([service])
+  @@index([startDate])
+  @@index([date])
+  @@index([accountId, date])
+}
+
+model MetaAd {
+  id               Int       @id @default(autoincrement())
+  adId             String?
+  accountId        String
+  campaignName     String
+  name             String
+  /// Per-day, for the same reason as MetaCampaign.date — see there.
+  date             DateTime? @db.Date
+  cost             Decimal   @db.Decimal(14, 2)
+  impressions      Int       @default(0)
+  clicks           Int       @default(0)
+  msgConversations Int       @default(0)
+  onFbLeads        Int       @default(0)
+  /// Resolved from the ad's own name FIRST, then inherited from its campaign.
+  /// The ad called "offer" is Laser at Mall Of Arabia and unlabelled at
+  /// Alexandria — the name alone cannot tell you, so inheritance is not a
+  /// convenience here, it is the only correct answer.
+  doctor           String?
+  service          String?
+  branch           String?
+  /// Whether each of the three came from this ad's name or from its campaign,
+  /// so the page can show what it inferred rather than asserting it.
+  inherited        String[]
+  source           String    @default("live")
+  loadedAt         DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([campaignName])
+  @@index([service])
+  @@index([date])
+  @@index([accountId, date])
+}
+
+/// One row per Meta lead. Stores the JOIN KEY and nothing identifying.
+///
+/// `mobileKey` is the normalised ten digits; the raw +20 number and the lead's
+/// name are deliberately NOT stored. The join needs the key, the report needs
+/// counts, and no panel on report 03 needs to know who a lead is. That is the
+/// opposite of the unresolved-appointment queue, which keeps the full number
+/// precisely because it is a call list somebody works through.
+model MetaLead {
+  leadId    String   @id
+  accountId String
+  createdAt DateTime
+  formName  String?
+  /// Parsed from `formName` — the forms are named for the doctor ("dr mai",
+  /// "dr\poussy", "Dr.RANDA ELAGUIZY- modified-copy").
+  doctor    String?
+  mobileKey String?
+  /// `ad` for a Meta lead-ads row, `organic` for a row that arrives from the
+  /// CTA sheet upload. The sheet's own column cannot distinguish them, which is
+  /// why the channel lives here rather than being derived later.
+  channel   String   @default("ad")
+  source    String   @default("live")
+  loadedAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([mobileKey])
+  @@index([doctor])
+  @@index([channel])
+}
+
+model IgProfileDay {
+  id           Int      @id @default(autoincrement())
+  profileId    String
+  profileName  String
+  date         DateTime @db.Date
+  followers    Int      @default(0)
+  newFollowers Int      @default(0)
+  reach        Int      @default(0)
+  views        Int      @default(0)
+  source       String   @default("live")
+  loadedAt     DateTime @default(now())
+
+  @@unique([profileId, date, source])
+  @@index([date])
+}
+
+model IgPost {
+  id          Int      @id @default(autoincrement())
+  postId      String?
+  profileId   String
+  profileName String
+  postedAt    DateTime
+  format      String?
+  caption     String?
+  permalink   String?
+  views       Int      @default(0)
+  reach       Int      @default(0)
+  source      String   @default("live")
+  loadedAt    DateTime @default(now())
+
+  @@index([profileId, postedAt])
+}
+
+/// The PBX day roll-up. `dials` and the per-agent table disagree in the source
+/// pack — the tab says 7,888 while its own agent rows sum to 4,404 — so the two
+/// grains are stored separately and never added together.
+model PbxDay {
+  id              Int      @id @default(autoincrement())
+  date            DateTime @db.Date
+  inboundCalls    Int      @default(0)
+  inboundAnswered Int      @default(0)
+  dials           Int      @default(0)
+  source          String   @default("seed")
+  loadedAt        DateTime @default(now())
+
+  @@unique([date, source])
+  @@index([date])
+}
+
+model PbxHour {
+  id       Int       @id @default(autoincrement())
+  date     DateTime? @db.Date
+  hour     Int
+  calls    Int       @default(0)
+  answered Int       @default(0)
+  source   String    @default("seed")
+  loadedAt DateTime  @default(now())
+
+  @@index([hour])
+}
+
+model PbxQueueDay {
+  id        Int       @id @default(autoincrement())
+  queue     String
+  date      DateTime? @db.Date
+  offered   Int       @default(0)
+  answered  Int       @default(0)
+  abandoned Int       @default(0)
+  source    String    @default("seed")
+  loadedAt  DateTime  @default(now())
+
+  @@index([queue])
+  @@index([date])
+}
+
+model PbxAgentDay {
+  id          Int       @id @default(autoincrement())
+  ext         String
+  agentName   String?
+  date        DateTime? @db.Date
+  offered     Int       @default(0)
+  answered    Int       @default(0)
+  talkInSec   Int       @default(0)
+  dials       Int       @default(0)
+  connected   Int       @default(0)
+  talkOutSec  Int       @default(0)
+  daysActive  Int       @default(0)
+  /// Span between first and last call of the day. Occupancy and adherence are
+  /// computed FROM this against an assumed shift length, and the assumption is
+  /// doing the heavy lifting — the CDR carries no agent-state log, so there is
+  /// no login/ready/pause/wrap-up to measure against.
+  spanMinutes Int?
+  source      String    @default("seed")
+  loadedAt    DateTime  @default(now())
+
+  @@index([ext])
+  @@index([date])
+}
+
+/// Chat / omnichannel. No source has ever arrived — the newest export on the
+/// project stopped on 6 June, and chat was roughly seven in ten contacts in
+/// May. The table exists so the Admin upload has somewhere to land and the
+/// report has something to say "empty" about, rather than the whole channel
+/// being invisible.
+model ChatDay {
+  id               Int      @id @default(autoincrement())
+  date             DateTime @db.Date
+  channel          String
+  contacts         Int      @default(0)
+  handledByBot     Int      @default(0)
+  handledByHuman   Int      @default(0)
+  firstResponseSec Int?
+  source           String   @default("upload")
+  loadedAt         DateTime @default(now())
+
+  @@unique([date, channel, source])
+  @@index([date])
+}
+
+/// What each upload did, so a number's history is answerable a month later.
+model DataUpload {
+  id          Int       @id @default(autoincrement())
+  kind        String
+  filename    String?
+  rangeFrom   DateTime? @db.Date
+  rangeTo     DateTime? @db.Date
+  rowsWritten Int       @default(0)
+  /// Conflicts the importer found and the choice it made, kept verbatim. The
+  /// source packs contradict themselves in at least four places and a silent
+  /// pick is how a report starts lying.
+  notes       String?
+  actor       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([kind, createdAt])
+}
+
+/// Every Supermetrics API query, and how many rows it cost.
+///
+/// The subscription allows 50,000 API rows a month and a single full backfill
+/// of this app's Meta history is 26,712 of them — 53% of the month in one
+/// command. Two of those and the month is gone, at which point report 03 stops
+/// refreshing and nothing on the page would say why.
+///
+/// So usage is metered here rather than trusted to a schedule: the client adds
+/// a row per query, the sync refuses to start a pull that would cross the
+/// budget, and the Admin page can show what is left. Queries served through the
+/// interactive MCP connector do NOT count against that limit (measured: 28k
+/// rows pulled through it left the hub reading 0/50,000), so only the server
+/// key's traffic is recorded.
+model ApiQuery {
+  id    Int      @id @default(autoincrement())
+  /// `supermetrics` today; named so a second metered API does not need a table.
+  api   String   @default("supermetrics")
+  /// The data source and pull this was, for reading the trail back.
+  dsId  String?
+  label String?
+  rows  Int      @default(0)
+  ms    Int?
+  /// YYYY-MM of the request, denormalised so the monthly sum is an index hit
+  /// rather than a date_trunc over the whole table.
+  month String
+  ok    Boolean  @default(true)
+  error String?
+  at    DateTime @default(now())
+
+  @@index([api, month])
+  @@index([at])
+}
+
+/**
+ * ============================================================
+ * Reports 08 (Inventory Performance) and 09 (Procurement & Products).
+ * Four tables, and each one exists because Odoo does not answer the question:
+ * Consumable      which products are stock we care about, in what unit, and
+ * how many doses come out of one of them
+ * ConsumableLink  which invoiced SERVICE burns which of those consumables
+ * VendorTerm      the cash-back rate agreed with each supplier, and the
+ * purchase target set for them
+ * PurchaseReturn  goods sent back to a supplier
+ * The first two are the reason the reports can exist at all. Odoo invoices a
+ * SERVICE ("Allergan Botox", product 41415) and holds stock of a CONSUMABLE
+ * ("Allergan", product 39773); nothing in the database joins the two, and
+ * without that join a syringe leaving the fridge cannot be tied to the visit
+ * that used it. The source pack carries the mapping as a 76-entry table typed
+ * by hand, so that is what these two tables are: that knowledge, stored where
+ * it can be corrected.
+ * ============================================================
+ */
+
+/// A product whose stock is worth tracking, with the unit it is counted in.
+///
+/// Keyed on the ODOO PRODUCT ID, not the name. `StockQuant.productId` and
+/// `InvoiceLine.productId` are both Odoo ids, so an id join is exact where a
+/// name join is a guess — and the names genuinely differ ("Sypha  Volume" with
+/// two spaces, "pro Derma" vs "Pro Derma").
+model Consumable {
+  id              Int      @id @default(autoincrement())
+  /// Odoo `product.product` id.
+  odooId          Int      @unique
+  name            String
+  vendorName      String?
+  category        String?
+  /// syringes · vials · pens · tubes. What ONE of these is counted as.
+  unit            String?
+  /// How many doses one unit yields. NULL means "one unit is one dose" — which
+  /// is not the same as zero, and is why this is nullable rather than defaulted.
+  /// Only 38 of the 101 seeded products carry one.
+  dosesPerUnit    Decimal? @db.Decimal(10, 3)
+  /// Odoo lists some products twice. The duplicate points at the survivor here
+  /// and is never counted on its own — five of the seeded rows are aliases.
+  /// Reading these as separate SKUs is how a stock figure quietly halves.
+  mergeIntoOdooId Int?
+  active          Boolean  @default(true)
+  source          String   @default("seed")
+  loadedAt        DateTime @default(now())
+
+  @@index([category])
+  @@index([mergeIntoOdooId])
+}
+
+/// The invoiced service → the consumable it burns.
+///
+/// 48 of the pack's 76 entries match an `InvoiceLine.productName` exactly and
+/// are seeded resolved. The other 28 are seeded UNRESOLVED, with
+/// `consumableOdooId` null, and listed on the report and in Admin → Name
+/// mapping. An unresolved link contributes nothing: guessing the nearest
+/// consumable would move real units onto the wrong product, and both the
+/// inflated and the deflated figure would look plausible.
+model ConsumableLink {
+  id               Int      @id @default(autoincrement())
+  /// Odoo id of the SERVICE as invoiced, and the real key: one invoiced service
+  /// burns one consumable. NULL only on an UNRESOLVED row, which is a record of
+  /// something the pack claimed that could not be tied to our data — Postgres
+  /// allows many NULLs in a unique index, which is what makes both shapes fit
+  /// in one table instead of two.
+  serviceProductId Int?     @unique
+  /// The Odoo service name, for reading the table without a join.
+  serviceName      String?
+  /// How the source pack spelled it. Kept because it is the only handle on an
+  /// unresolved row, and because the two spellings differing IS the finding.
+  packLabel        String?
+  /// Odoo id of the consumable. NULL = unresolved, and contributes to nothing.
+  consumableOdooId Int?
+  /// Doses of the consumable one unit of the service uses, when it is not 1.
+  dosesPerService  Decimal? @db.Decimal(10, 3)
+  /// Which rule matched — exact, squash, prefix, contains — or why it did not.
+  /// A link found by `contains` is worth a second look; one found by `exact` is
+  /// not, and without this recorded they read identically.
+  matchRule        String?
+  note             String?
+  source           String   @default("seed")
+  loadedAt         DateTime @default(now())
+
+  @@index([consumableOdooId])
+  @@index([packLabel])
+}
+
+/// What was agreed with a supplier — the cash-back rate, and the target.
+///
+/// POLICY, NOT DATA. Nothing in Odoo says Bio Solutions pays 10% back and
+/// Eldawlia Pharma pays 15%; somebody negotiated it. So it is stored and edited
+/// rather than computed, seeded once with ON CONFLICT DO NOTHING, and a rate
+/// somebody changes in Admin is never reverted by a later deploy — the rule the
+/// commission tables learned the hard way on 2026-09-01.
+model VendorTerm {
+  id           Int      @id @default(autoincrement())
+  year         Int
+  supplierName String
+  /// 0.10 for 10%. Null means no cash-back agreement, which is not 0% — one is
+  /// "nothing is owed", the other is "we never asked".
+  cashbackRate Decimal? @db.Decimal(6, 4)
+  /// The wording of the agreement, kept verbatim so the rate is answerable.
+  basisNote    String?
+  targetLabel  String?
+  targetAmount Decimal? @db.Decimal(14, 2)
+  source       String   @default("seed")
+  updatedAt    DateTime @updatedAt
+
+  @@unique([year, supplierName])
+  @@index([year])
+}
+
+/// Goods sent back to a supplier.
+///
+/// There are ZERO negative `BillLine` rows in the cache, so returns are not in
+/// Odoo in any form this app can read: the 11 rows seeded here are the only
+/// record of them in existence, and they matter — 933,772 of Bio Solutions'
+/// 7.86 M is a return, which is 12% of that vendor's year.
+///
+/// `source` is `seed` until a real export arrives through Admin → Uploads, then
+/// `upload`, and the report prints which it is reading. Same contract as the PBX
+/// feed: a seeded figure that says it is seeded beats a blank tab.
+model PurchaseReturn {
+  id           Int       @id @default(autoincrement())
+  date         DateTime? @db.Date
+  supplierName String
+  product      String
+  category     String?
+  qty          Decimal   @db.Decimal(14, 3)
+  unitCost     Decimal?  @db.Decimal(14, 4)
+  /// Positive here. Every caller subtracts it — storing it negative as well
+  /// would make a double negation the easiest possible mistake to make.
+  value        Decimal   @db.Decimal(14, 2)
+  source       String    @default("seed")
+  loadedAt     DateTime  @default(now())
+
+  @@index([supplierName])
+  @@index([date])
+}
+
+/// ============================================================
+/// Doctor commission — the half of the payroll Odoo does not hold.
+///
+/// Every month somebody rebuilds `_Doc comm <month>.xlsx` by hand: pull the
+/// invoice lines, pivot them by physician and branch, look each doctor's rate
+/// up in `Nouvel Age Commissions.xlsx`, add hours and deductions, and publish a
+/// frozen HTML payslip pack. Measured against August 2026 that pack is
+/// 20,756,217 of revenue and 3,447,798 of commission across 73 people.
+///
+/// 95% OF THAT IS DERIVABLE. Revenue reconciles to our own cache at 1.5% once
+/// packages are excluded — the same ex-package basis every other report uses —
+/// and commission is revenue times a band rate. What is NOT derivable is the
+/// payroll wrapper: hours worked, deductions, management fees, the withholding
+/// rate, bank details, and the handful of invoices moved between doctors by
+/// hand. Those three tables below are exactly that gap, and nothing more.
+/// ============================================================
+
+/// A commission scheme: the bands a doctor's revenue is rated at.
+///
+/// Eight of them exist in the source workbook and they are not variations on
+/// one rule — Standard is a four-band ladder, Mai Mohsen is a flat 17% with no
+/// target, Skincare is a 50/50 split, Nutrition is 15% with a separate 50% on
+/// plans. Storing them as a band list with a flat-rate special case keeps all
+/// eight in one shape without pretending they are the same scheme.
+model CommissionScheme {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  /// `[{ from, to, rate }]`, ascending, `to: null` meaning "and above".
+  /// A flat scheme is a single band from 0 with a null ceiling.
+  bands      Json
+  /// Paid per hour worked, when the scheme counts hours at all. Several
+  /// explicitly do not — "No working hours will be calculated" — and those
+  /// carry null rather than zero, because zero is a rate and null is a rule.
+  hourlyRate Decimal? @db.Decimal(10, 2)
+  /// A fixed monthly amount the scheme grants before commission, e.g. Mai
+  /// Mohsen's 100,000 basic or Randa & Poussy's 50,000.
+  fixedBasic Decimal? @db.Decimal(12, 2)
+  notes      String?
+  active     Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  doctors DoctorScheme[]
+}
+
+/// Which scheme a doctor is on, and the per-person overrides.
+///
+/// Keyed by the name Odoo puts on the invoice, because that is the only handle
+/// the revenue side has. Where the payslip pack spells a doctor differently
+/// from Odoo, `IdentityAlias` already resolves it and is reused here rather
+/// than a second mapping.
+model DoctorScheme {
+  id              Int      @id @default(autoincrement())
+  doctorName      String   @unique
+  schemeId        Int?
+  /// Overrides the scheme's own rate for this person. Three Exclusive doctors
+  /// are listed at 60 individually in the workbook.
+  hourlyRate      Decimal? @db.Decimal(10, 2)
+  /// An agreed rate that replaces whatever band the revenue lands in.
+  ///
+  /// MEASURED, NOT INVENTED: our bands reproduce 65 of the 73 rates the August
+  /// pack actually paid, and every one of the other eight is a real exception
+  /// rather than a defect — Noura Maged at 35% ("after consumables", written in
+  /// the workbook), Hossam Shehab at 50%, and four people on exactly half their
+  /// scheme's rate. Without this field those eight are silently wrong; with it
+  /// they are visible, attributable and editable.
+  rateOverride    Decimal? @db.Decimal(6, 4)
+  rateOverrideWhy String?
+  /// The monthly management fee, for the seven people who draw one.
+  mgmtFee         Decimal? @db.Decimal(12, 2)
+  /// Withholding: 5% or 10% in August, applied to the gross.
+  taxRate         Decimal? @db.Decimal(6, 4)
+  payMethod       String?
+  bankAcc         String?
+  bankName        String?
+  active          Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  scheme CommissionScheme? @relation(fields: [schemeId], references: [id], onDelete: SetNull)
+
+  @@index([schemeId])
+}
+
+/// What changed for one doctor in one month, and could not be derived.
+///
+/// One row per doctor per period, filled by the `payroll` upload. Everything
+/// here is a fact about that month only: the hours they worked, what was
+/// deducted and why, and any invoice moved on or off them by hand. Deliberately
+/// NOT where the scheme lives — a rate that changes is a scheme change, and
+/// recording it per month would let two months disagree about the same rule.
+model DoctorPayrollMonth {
+  id         Int      @id @default(autoincrement())
+  period     String // "2026-08"
+  doctorName String
+  hours      Decimal? @db.Decimal(10, 2)
+  ded        Decimal? @db.Decimal(12, 2)
+  dedReason  String?
+  /// The nurse-Onda deduction, negative by convention in the source pack.
+  onda       Decimal? @db.Decimal(12, 2)
+  mgmt       Decimal? @db.Decimal(12, 2)
+  taxRate    Decimal? @db.Decimal(6, 4)
+  maint      Decimal? @db.Decimal(12, 2)
+  gcell      Decimal? @db.Decimal(12, 2)
+  /// An explicit correction to the gross — the 10,000 on Dr. Randa El Aguizy in
+  /// August that the formula alone does not reproduce. Shown as its own line so
+  /// it is never quietly absorbed into a total.
+  adjustment Decimal? @db.Decimal(12, 2)
+  note       String?
+  source     String   @default("upload")
+  updatedAt  DateTime @updatedAt
+
+  @@unique([period, doctorName])
+  @@index([period])
+}
+
+/// ============================================================
+/// COMMISSION POLICY v3.2 — ALONGSIDE v2.8, NEVER INSTEAD OF IT.
+///
+/// v2.8 pays a branch from `CommissionTier`: fourteen revenue tiers, each
+/// holding a min and max PER ROLE, against three achievement bands.
+/// v3.2 pays the TEAM one pool, picked from a grid of fourteen revenue tiers by
+/// five achievement levels, then split by headcount and weight.
+///
+/// They are different generations of the same agreement, not a disagreement, so
+/// both are stored and `CommissionPolicyVersion.effectiveFrom` decides which
+/// applies to a month. A month already paid under v2.8 keeps the answer it was
+/// paid on — which is the entire reason that model exists.
+/// ============================================================
+
+/// The five achievement levels a branch can reach. Below the lowest, nothing.
+model CommissionLevel {
+  version   String
+  /// 80, 85, 90, 95, 100 — also the column this level reads in CommissionPool.
+  level     Int
+  /// Achievement at or above this share reaches the level. 0.8 is 80%.
+  fromPct   Decimal  @db.Decimal(6, 4)
+  updatedAt DateTime @updatedAt
+
+  @@id([version, level])
+}
+
+/// The pool grid: revenue picks the ROW, achievement picks the COLUMN.
+model CommissionPool {
+  version   String
+  tierNo    Int
+  revFrom   Decimal  @db.Decimal(14, 2)
+  /// null on the top tier only — "and above".
+  revTo     Decimal? @db.Decimal(14, 2)
+  /// Five figures in level order: [80, 85, 90, 95, 100]. A list rather than
+  /// five columns because the levels themselves are editable, and a schema that
+  /// hard-codes five of them cannot answer a policy with six.
+  pools     Json
+  updatedAt DateTime @updatedAt
+
+  @@id([version, tierNo])
+}
+
+/// v3.2 role weights — A DIFFERENT GRANULARITY FROM `CommissionRole`, which is
+/// why it is a table and not two columns on that one.
+///
+/// `CommissionRole` is five SEATS whose `sharePct` sums to 1.0: Branch Manager,
+/// Senior 1, Senior 2, Reception / Billing 1, Reception / Billing 2. v3.2 is
+/// four ROLE TYPES with a headcount each — manager 1 at weight 3, reception 2
+/// at 2, senior 2 at 2, nurse/office 2 at 0.5 — seven people, including a nurse
+/// role v2.8 has no seat for at all. A person earns pool x weight / sum(people
+/// x weight).
+///
+/// Writing `people` and `weight` onto the seat rows looked obvious and was
+/// wrong: three of the four names match no seat, and the two that do would have
+/// been counted twice.
+model CommissionRoleWeight {
+  version   String
+  role      String
+  people    Int
+  weight    Decimal  @db.Decimal(6, 2)
+  notes     String?
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([version, role])
+}
+
+/// Who is actually in a branch team. Without this, a staff payslip can only say
+/// "Reception 1" — the share is right and nobody can be paid from it.
+model CommissionStaff {
+  id        Int      @id @default(autoincrement())
+  branchId  Int
+  role      String
+  name      String
+  payMethod String?
+  bankAcc   String?
+  active    Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchId, role, name])
+  @@index([branchId])
+}
+
+/// The approved doctor target plan, 2026-07 to 2027-12.
+///
+/// NOT `DoctorTarget`, which belongs to a published monthly sheet with its own
+/// draft, reconcile and publish semantics. This is a multi-year plan: one
+/// figure per doctor per month, edited as a grid, with no month-close ceremony
+/// around it.
+model DoctorPlanMonth {
+  doctorName String
+  /// "2027-03"
+  period     String
+  /// Injectables | Laser + Injection | Laser-led | Nutrition | Therapist
+  groupName  String?
+  target     Decimal  @db.Decimal(14, 2)
+  updatedAt  DateTime @updatedAt
+
+  @@id([doctorName, period])
+  @@index([period])
+}
+
+/// Monthly actuals for 2024 and 2025 — history the Odoo cache does not hold.
+///
+/// The sync reaches back to 2026-01 and no further, so every figure before that
+/// exists only in the journal exports the plan file was built from. Seeded
+/// once, never recomputed, and labelled frozen wherever it is drawn: a restated
+/// 2025 figure will not update here, and pretending otherwise would be worse
+/// than saying so.
+model HistoryMonth {
+  /// "2024-01"
+  period String
+  /// branch | group | product — which cut of the month this row is.
+  kind   String
+  name   String
+  ex     Decimal @db.Decimal(14, 2)
+  source String  @default("seed")
+
+  @@id([period, kind, name])
+  @@index([period])
+}
+
+/**
+ * ============================================================
+ * REPORT 02 v2 — the contact centre as people rather than extensions.
+ * The old report could say 2,456 calls were answered and could not say by whom:
+ * five shared Odoo logins stand between 67 real people and every record they
+ * touch. These tables carry the frozen October snapshot that can, because it
+ * reads the `Employee:` line out of the first "Record created" chatter message
+ * instead of trusting `create_uid`.
+ * ALL OF IT IS `seed`. Nothing here is synced; it was decoded once from
+ * `Contact Centre · Nouvelage.html` (snapshot 2026-10-03 18:15) by
+ * scripts/import-contact-centre-html.js. The `source` column exists so a live
+ * sync can one day land beside the seed and win per grain, exactly as
+ * preferUpload() already does for the PBX tables — not because anything writes
+ * another value today.
+ * THE SNAPSHOT CANNOT ANSWER EVERYTHING, and the gaps are structural rather
+ * than empty. CcLead carries no source or campaign; CcActivity.personId and
+ * CcRebooking.personId are -1 on every row; CcOpportunity.team is 1 on every
+ * row. Those are recorded in the DataUpload notes and refused by name in the
+ * report, because a nullable column full of nulls reads as "nobody did this"
+ * when it means "this export did not carry it".
+ * ============================================================
+ */
+
+/// Every lookup array in the snapshot, flattened: the file index-compresses
+/// each record against a list of names, and the records are useless without it.
+///
+/// One table rather than fifteen because they are all (index -> string) and are
+/// only ever read by index. `kind` is the array's own name in the file —
+/// E B P D LG for the opportunity block, BR DOC PP CAT FAM for appointments,
+/// U PN Bs Ty OUT for CRM.
+model CcLookup {
+  kind   String
+  idx    Int
+  value  String
+  source String @default("seed")
+
+  @@id([kind, idx, source])
+  @@index([kind])
+}
+
+/// One contact-centre opportunity. DATA.R, decoded.
+///
+/// `showed` is a PATIENT match, not a status: the patient was found on some
+/// attended visit on or after this opportunity was created. It deliberately
+/// beats the appointment state, so a cancelled booking whose patient walked in
+/// anyway counts as showed — and `ownBooking` (the state really was attended)
+/// does not. The gap between the two is credit the agent lost.
+model CcOpportunity {
+  id         Int      @id @default(autoincrement())
+  date       DateTime @db.Date
+  hour       Int
+  /// -> CcLookup E
+  personIdx  Int
+  /// -> CcLookup B
+  branchIdx  Int
+  /// -> CcLookup P
+  deptIdx    Int
+  /// -> CcLookup D, from the first linked appointment
+  doctorIdx  Int
+  /// 0 no booking · 1 attended · 2 not closed · 3 cancelled · 4 upcoming.
+  /// no_show is bucketed as 2, not 3.
+  outcome    Int
+  showed     Boolean  @default(false)
+  ownBooking Boolean  @default(false)
+  /// EGP on the matched visits. Indicative: it is the patient's invoice total,
+  /// not this booking's.
+  revenue    Decimal  @default(0) @db.Decimal(14, 2)
+  /// 1 contact centre · 0 branch follow-up. 1 on every row in this snapshot.
+  team       Int      @default(1)
+  /// -> CcLookup LG
+  loginIdx   Int
+  /// SHA-256 of the last 10 digits of the phone, truncated to 12 hex. The only
+  /// join to the PBX side, and the only form the number is kept in.
+  phoneHash  String?
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([phoneHash])
+  @@index([personIdx])
+}
+
+/// One appointment. APPT.R, decoded.
+///
+/// Rescheduled rows are counted separately and excluded from every total — a
+/// reschedule is one booking that moved, and adding both halves double-counts
+/// the patient.
+model CcAppointment {
+  id             Int      @id @default(autoincrement())
+  date           DateTime @db.Date
+  /// Minutes from midnight. -1 when the appointment carries no slot (13 rows).
+  slotMinutes    Int
+  /// -> CcLookup BR
+  branchIdx      Int
+  /// -> CcLookup DOC
+  doctorIdx      Int
+  /// 0 showed · 1 confirmed · 2 pending · 3 cancelled · 4 rescheduled · 5 no_show · 6 other
+  stateCode      Int
+  /// 0 contact centre · 1 branch · 2 system. Never 2 in this snapshot.
+  sourceCode     Int
+  /// -> CcLookup PP — who booked it, from the PIN stamp on the chatter message
+  bookerIdx      Int
+  /// -> CcLookup FAM
+  familyIdx      Int
+  /// -> CcLookup CAT, the first service line
+  categoryIdx    Int
+  serviceLines   Int      @default(0)
+  /// 168 of 3,638. Either the branches are not confirming or they confirm and
+  /// do not record it; the report says both readings rather than picking.
+  hadConfirmCall Boolean  @default(false)
+  /// -> CcLookup PP, or -1
+  confirmByIdx   Int      @default(-1)
+  isReschedule   Boolean  @default(false)
+  isZat          Boolean  @default(false)
+  source         String   @default("seed")
+  loadedAt       DateTime @default(now())
+
+  @@index([date])
+  @@index([branchIdx])
+}
+
+/// One CRM opportunity across ALL logins — four times the contact-centre-only
+/// set, and the only place branch follow-up is visible at all. CRM.L, decoded.
+model CcLead {
+  id                  Int      @id @default(autoincrement())
+  date                DateTime @db.Date
+  hour                Int
+  /// -> CcLookup U — the shared Odoo login
+  loginIdx            Int
+  /// -> CcLookup Bs
+  branchIdx           Int
+  booked              Boolean  @default(false)
+  /// Opportunity created -> booking created. -1 when never booked (4,582 rows).
+  /// Reported as a MEDIAN: the tail runs to 41,426 minutes and a mean is a lie.
+  minutesToBooking    Int      @default(-1)
+  /// The same partner had a contact-centre opportunity in the previous 30 days.
+  /// Keyed on Odoo partner, not on phone.
+  duplicateOfCc       Boolean  @default(false)
+  /// -> CcLookup PN — the real person, from the chatter stamp
+  openerIdx           Int
+  /// employee_id disagrees with the person who created the record.
+  employeeOverwritten Boolean  @default(false)
+  source              String   @default("seed")
+  loadedAt            DateTime @default(now())
+
+  @@index([date])
+  @@index([loginIdx])
+}
+
+/// Activities logged on opportunities. CRM.A, decoded.
+///
+/// `personIdx` is -1 on all 3,190 rows in this snapshot, so the per-person
+/// breakdown is not computable and the report labels the table by LOGIN.
+model CcActivity {
+  id         Int      @id @default(autoincrement())
+  date       DateTime @db.Date
+  hour       Int
+  /// -> CcLookup Ty
+  typeIdx    Int
+  /// -> CcLookup U
+  loginIdx   Int
+  /// 0 open · 1 overdue · 2 done
+  state      Int
+  /// -> CcLookup OUT, or -1. Bucketed by first-match-wins substring matching
+  /// over mixed English, Arabic and Franco-Arabic. Guesswork, and labelled so.
+  outcomeIdx Int      @default(-1)
+  /// -> CcLookup Bs
+  branchIdx  Int
+  onCcOpp    Boolean  @default(false)
+  /// -> CcLookup PN, or -1. Always -1 here.
+  personIdx  Int      @default(-1)
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@index([date])
+}
+
+/// Who got the credit when a patient was re-booked. CRM.RB, decoded.
+///
+/// `credited` false means the patient attended on an appointment that was NOT
+/// one of the ones linked to the agent's opportunity — somebody else re-booked
+/// them and the original agent lost the booking.
+model CcRebooking {
+  id              Int      @id @default(autoincrement())
+  date            DateTime @db.Date
+  /// -> CcLookup Bs
+  leadBranchIdx   Int
+  /// -> CcLookup U, or -1 (always -1 on the 1,139 credited rows)
+  rebookLoginIdx  Int      @default(-1)
+  /// -> CcLookup Bs, or -1. -1 on exactly the 1,139 credited rows, for the
+  /// same reason rebookLoginIdx is: nobody re-booked them.
+  rebookBranchIdx Int      @default(-1)
+  credited        Boolean  @default(false)
+  /// -> CcLookup E
+  agentIdx        Int
+  team            Int      @default(1)
+  /// -> CcLookup PN, or -1. Always -1 here, so the report can only name a login.
+  personIdx       Int      @default(-1)
+  source          String   @default("seed")
+  loadedAt        DateTime @default(now())
+
+  @@index([date])
+}
+
+/// The HR directory the identity checks run against. CRM.EI, decoded.
+///
+/// `homeLogin` is the login this person is supposed to work under; using any
+/// other one is the cross-login finding on the Data quality panel.
+model CcEmployee {
+  name       String
+  department String   @default("")
+  jobTitle   String   @default("")
+  homeLogin  String   @default("")
+  /// Odoo user ids this person is allowed to act as.
+  allowedIds Int[]
+  active     Boolean  @default(true)
+  source     String   @default("seed")
+  loadedAt   DateTime @default(now())
+
+  @@id([name, source])
+  @@index([department])
+}
+
+/// The phone extension map — the one table here that people edit.
+///
+/// It is why the agents table can print a name: PbxAgentDay.agentName is null
+/// on every row, and all eleven extensions that table holds are named here.
+/// Only 9 of the 61 carry an Odoo employee, so the Odoo column is blank for 52
+/// and the panel says which.
+model PbxExtension {
+  ext          String   @id
+  /// The name configured on the phone, e.g. "Fatma Nouvelage".
+  phoneName    String   @default("")
+  /// The matching hr.employee name, "" when nobody has mapped it.
+  odooEmployee String   @default("")
+  /// cc | branch | other
+  team         String   @default("other")
+  branch       String   @default("")
+  source       String   @default("seed")
+  updatedAt    DateTime @updatedAt
+
+  @@index([team])
+}
+
+/// One phone call, from the weekly Grandstream UCM CDR export.
+///
+/// WHY PER CALL AND NOT PER DAY. The weekly file is a raw CDR — one row per call
+/// LEG, several legs per call, grouped by session — and the existing PBX upload
+/// was built for aggregated queue/agent reports. Fed a CDR it read the columns,
+/// claimed the file fitted, and planned ZERO records. These rows are the calls
+/// the contact-centre page's own parser rebuilds from the legs; the day, queue,
+/// agent and hour roll-ups the report reads are derived from them on import.
+///
+/// AN UPLOAD REPLACES WHOLE WEEKS (Sunday–Saturday, Cairo), which is the rule
+/// the source page used: re-uploading a week swaps it, never adds to it.
+///
+/// THE WEEKLY LOCK READS THIS TABLE. The Contact Centre report locks every
+/// Sunday until last week is here, and opens again once its calls reach at least
+/// the Friday — see src/lib/cc-gate.js.
+///
+/// The phone number is never stored, only `phoneHash`: SHA-256 of its last ten
+/// digits, first 12 hex — the same form as CcOpportunity.phoneHash, so a call
+/// can be joined to an Odoo opportunity without either side holding the number.
+model PbxCall {
+  id        Int      @id @default(autoincrement())
+  /// The Sunday that starts this call's week.
+  weekStart DateTime @db.Date
+  date      DateTime @db.Date
+  hour      Int
+  /// 1 inbound · 2 outbound
+  direction Int
+  ext       String   @default("")
+  answered  Boolean  @default(false)
+  /// Queue entry to answer, in seconds. -1 when the CDR cannot say.
+  waitSec   Int      @default(-1)
+  talkSec   Int      @default(0)
+  phoneHash String?
+  queue     String   @default("")
+  /// grandstream: 0 answered · 1 rang in a queue, nobody answered · 5 out-of-hours
+  /// announcement · 6 ended in the IVR. generic: 0 answered · 1 no answer ·
+  /// 2 busy · 3 failed · 4 other. Read together with `format`.
+  status    Int
+  /// grandstream | generic — which parser built the row.
+  format    String   @default("grandstream")
+  source    String   @default("upload")
+  uploadId  Int?
+  loadedAt  DateTime @default(now())
+
+  @@index([weekStart])
+  @@index([date])
+  @@index([phoneHash])
+}

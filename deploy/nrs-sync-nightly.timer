@@ -1,0 +1,10 @@
+[Unit]
+Description=Nouvelage sales sync — trailing week and stock, nightly
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+Persistent=yes
+Unit=nrs-sync@nightly.service
+
+[Install]
+WantedBy=timers.target

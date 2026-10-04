@@ -1,0 +1,16 @@
+[Unit]
+Description=Nouvelage Daily Sales — sync from the Odoo MCP
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nrs
+Group=nrs
+WorkingDirectory=/opt/nrs
+EnvironmentFile=/opt/nrs/.env
+ExecStart=/opt/nrs/scripts/cron.sh %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/nrs

@@ -1,0 +1,10 @@
+[Unit]
+Description=Nouvelage sales sync — this month, hourly
+
+[Timer]
+OnCalendar=*:07
+Persistent=yes
+Unit=nrs-sync@hourly.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+node_modules/
+.env
+*.log
+dist/
+
+# Bootstrap captures: multi-megabyte Supermetrics pulls, regenerable with
+# scripts/mcp-capture.js. They are data, not source, and one of them carries
+# lead phone numbers — which must never reach a git history.
+data/*.json
+
+# macOS litter. AppleDouble `._*` files once reached the droplet inside a
+# tarball and were served publicly out of public/ — never let them in here.
+.DS_Store
+._*

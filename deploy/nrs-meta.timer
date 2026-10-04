@@ -1,0 +1,16 @@
+[Unit]
+Description=Nouvelage Marketing — pull Meta and Instagram nightly
+
+[Timer]
+# 03:20, twenty minutes after the Odoo nightly sync has had its run at 02:40,
+# so the two are never competing for the same Postgres or the same CPU.
+OnCalendar=*-*-* 03:20:00
+# A droplet that was asleep or rebooted still gets its pull rather than skipping
+# a day silently — a missed night is a hole in the trend that nothing refills,
+# because Meta only keeps about 90 days of leads.
+Persistent=yes
+RandomizedDelaySec=300
+Unit=nrs-meta.service
+
+[Install]
+WantedBy=timers.target

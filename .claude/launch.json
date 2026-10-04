@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nouvelage-webapp",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--watch",
+        "/Users/mwg/nouvelage-sales-webapp/src/server.js"
+      ],
+      "port": 3020
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#58382C">
+<title>Admin · Nouvelage Sales</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/admin.css">
+</head>
+<body>
+
+<div class="cbar">
+  <div class="cbar-row">
+    <a class="btn ghost" href="/">← Report</a>
+    <span class="cbar-spacer"></span>
+    <span class="cstat"><i class="dot ok"></i><span id="who">…</span></span>
+    <form method="post" action="/auth/logout" style="display:inline">
+      <button class="btn ghost" type="submit">Sign out</button>
+    </form>
+  </div>
+  <div class="err" id="err"></div>
+</div>
+
+<header class="header">
+  <div class="brand">Nouvelage · Daily Sales · Odoo 18</div>
+  <h1>Admin<em>targets, names, history</em></h1>
+  <p class="header-sub">The things Odoo has no place for — the approved target schedule, how its names map onto Odoo's, and the three feeds no system sends us.</p>
+</header>
+
+<div class="tabs-wrap"><div class="tabs">
+  <button class="tab active" data-panel="status"><span class="tab-num">01</span> Needs attention</button>
+  <button class="tab" data-panel="periods"><span class="tab-num">02</span> Periods</button>
+  <button class="tab" data-panel="commission"><span class="tab-num">03</span> Commission</button>
+  <button class="tab" data-panel="mapping"><span class="tab-num">04</span> Mapping</button>
+  <button class="tab" data-panel="data"><span class="tab-num">05</span> Data</button>
+  <button class="tab" data-panel="audit"><span class="tab-num">06</span> Activity</button>
+</div></div>
+
+<div class="panel active" id="status"></div>
+
+<!-- Periods holds three SECTIONS, not three tabs: the calendar of months, the
+     editor, and the Excel route in. They were peers on the old strip, which
+     made "Edit sheet" look like somewhere you go rather than something you are
+     already doing. Their ids are unchanged, so every render function and every
+     `$('editor')` still finds its container. -->
+<div class="panel" id="periods">
+  <div id="periodsList"></div>
+  <div id="editor"></div>
+  <div id="import"></div>
+  <div id="plan"></div>
+</div>
+
+<div class="panel" id="commission"></div>
+
+<div class="panel" id="mapping">
+  <div id="aliases"></div>
+  <div id="links"></div>
+</div>
+
+<div class="panel" id="data">
+  <div id="feeds"></div>
+  <div id="uploads"></div>
+</div>
+
+<div class="panel" id="audit"></div>
+
+<!-- The shared $/fmt/pc/esc, loaded before anything that uses them. -->
+<script src="/assets/fmt.js"></script>
+<script src="/assets/shell.js"></script>
+<script src="/assets/nav.js"></script>
+<script src="/assets/draft.js"></script>
+<script src="/assets/tg-fmt.js"></script>
+<script src="/assets/admin-plan.js"></script>
+<script src="/assets/admin-v32.js"></script>
+<!-- The phone extension map: its own module, and it needs cc-fmt for esc/fmt. -->
+<script src="/assets/cc-fmt.js"></script>
+<script src="/assets/admin-ext.js"></script>
+<!-- The weekly UCM export: the upload that opens the Contact Centre report. -->
+<script src="/assets/admin-ucm.js"></script>
+<script src="/assets/admin.js"></script>
+</body>
+</html>
