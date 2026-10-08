@@ -76,6 +76,28 @@ const TABLES = [
      would show the commission and state plainly that no payslip is available —
      correct, and not what anybody wants to open the tab and find. */
   'CommissionScheme', 'DoctorScheme', 'DoctorPayrollMonth',
+  /* Added 2026-10-04 with the Targets & Plan port and Commission v3.2. The
+     droplet cannot produce one row of these: the 2027 plan, the 2024–25 history
+     and the v3.2 levels, pool grid and role weights were all transcribed from
+     files that exist only on this Mac. CommissionStaff is empty today and is
+     listed so the first names entered here travel with the next deploy. */
+  'CommissionLevel', 'CommissionPool', 'CommissionRoleWeight', 'CommissionStaff',
+  'DoctorPlanMonth', 'HistoryMonth',
+  /* And Contact Centre v2: the frozen October snapshot and the phone
+     extension map. Seeded from `Contact Centre · Nouvelage.html`, which is not
+     on the server. PbxCall is NOT here — the weekly UCM upload fills it on the
+     droplet itself, and shipping this Mac's (empty) table would carry nothing. */
+  /* NOT CcOpportunity, CcAppointment, CcLead, CcActivity or CcRebooking —
+     removed 2026-10-07 after a rehearsal caught the next deploy DOUBLING every
+     one of them on the live site. Their only key is an autoincrement id, and a
+     re-seed hands out new ids (2,956 upward instead of 1 upward), so
+     ON CONFLICT DO NOTHING saw nothing to conflict with and added a second
+     copy of the whole snapshot. The droplet has carried this frozen snapshot
+     since 2026-10-04; there is nothing new to send. A future re-seed is a
+     deliberate act and runs ON the droplet, with the seeder:
+       node scripts/import-contact-centre-html.js <file.html>
+     The three left here are keyed by name, so they cannot double. */
+  'CcLookup', 'CcEmployee', 'PbxExtension',
 ];
 /* Tables whose id is a serial and therefore needs its sequence moved on. */
 const SEQS = [
@@ -85,7 +107,19 @@ const SEQS = [
   /* The three doctor-commission tables. Without a setval here the droplet's
      next new scheme would be handed id 1, which is already taken. */
   'CommissionScheme', 'DoctorScheme', 'DoctorPayrollMonth',
+  /* The 2026-10-04 additions. Any without an integer id is skipped by
+     hasSerialId() below, so listing one too many cannot break the file. */
+  'CommissionLevel', 'CommissionPool', 'CommissionRoleWeight', 'CommissionStaff',
+  'DoctorPlanMonth', 'HistoryMonth',
+  'CcLookup', 'CcEmployee', 'PbxExtension',
 ];
+
+/* A Postgres ARRAY column (CcEmployee.allowedIds is int[]). The JSON branch
+   below would write '[1,2]', which Postgres rejects for an array — it wants
+   '{1,2}'. Decided by the column's real type, read from the database, so a Json
+   column holding an array (CommissionScheme.bands) still goes out as JSON. */
+const arrLit = (v) => `'{${v.map((x) => (typeof x === 'number' ? String(x)
+  : `"${String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)).join(',').replace(/'/g, "''")}}'`;
 
 const lit = (v) => {
   if (v === null || v === undefined) return 'NULL';
@@ -112,11 +146,13 @@ const lit = (v) => {
 
   /* Column order comes from the database itself, so a schema change cannot leave
      this file quietly writing values into the wrong columns. */
+  const arrayCols = {};
   const colsOf = async (table) => {
     const rows = await prisma.$queryRawUnsafe(
-      `SELECT column_name FROM information_schema.columns
+      `SELECT column_name, data_type FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = $1
         ORDER BY ordinal_position`, table);
+    arrayCols[table] = new Set(rows.filter((r) => r.data_type === 'ARRAY').map((r) => r.column_name));
     return rows.map((r) => r.column_name);
   };
 
@@ -141,7 +177,8 @@ const lit = (v) => {
       /* No conflict target: ON CONFLICT DO NOTHING with none given ignores ANY
          unique violation, which is what we want across thirteen tables whose
          natural keys differ (key, name, tierNo, branchId+year+month, kind+ref). */
-      out.push(chunk.map((r) => `  (${cols.map((c) => lit(r[c])).join(', ')})`).join(',\n')
+      const val = (c, v) => (arrayCols[t].has(c) && Array.isArray(v) ? arrLit(v) : lit(v));
+      out.push(chunk.map((r) => `  (${cols.map((c) => val(c, r[c])).join(', ')})`).join(',\n')
         + '\nON CONFLICT DO NOTHING;');
     }
     out.push('');
@@ -182,6 +219,21 @@ const lit = (v) => {
       + ` FROM pg_get_serial_sequence('"${t}"', 'id') AS s;`);
   }
   out.push('');
+
+  /* The Contact Centre snapshot's provenance row. The report reads its snapshot
+     time and its GAP notes from here — without it the page cannot say what the
+     export does not carry. Inserted WITHOUT an id (the droplet has its own
+     DataUpload history and ids), and only if no cc:seed row exists yet, so a
+     re-run never adds a second one. */
+  const ccSeed = await prisma.dataUpload.findFirst({ where: { kind: 'cc:seed' }, orderBy: { createdAt: 'desc' } });
+  if (ccSeed) {
+    out.push('-- the Contact Centre snapshot record, once');
+    out.push(`INSERT INTO "DataUpload" ("kind", "filename", "rangeFrom", "rangeTo", "rowsWritten", "notes", "actor", "createdAt")`
+      + ` SELECT ${lit(ccSeed.kind)}, ${lit(ccSeed.filename)}, ${lit(ccSeed.rangeFrom)}, ${lit(ccSeed.rangeTo)},`
+      + ` ${lit(ccSeed.rowsWritten)}, ${lit(ccSeed.notes)}, ${lit(ccSeed.actor)}, ${lit(ccSeed.createdAt)}`
+      + ` WHERE NOT EXISTS (SELECT 1 FROM "DataUpload" WHERE "kind" = 'cc:seed');`);
+    out.push('');
+  }
 
   /* Branch aliases: the commission workbook spells branches differently from
      Odoo (CityStars vs City Stars, Zaied vs Zayed, MOA vs Mall Of Arabia).

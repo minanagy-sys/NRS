@@ -2,7 +2,7 @@
   "name": "nouvelage-sales-webapp",
   "version": "1.0.0",
   "private": true,
-  "description": "Nouvelage daily sales \u2014 web app over the Nouvelage Odoo MCP",
+  "description": "Nouvelage daily sales — web app over the Nouvelage Odoo MCP",
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
@@ -11,7 +11,7 @@
     "studio": "prisma studio",
     "audit": "node scripts/audit.js",
     "smoke": "node scripts/smoke.js",
-    "test": "node test/rules.test.js && node test/sheet.test.js && node test/mcp.test.js && node test/export.test.js && node test/finance-rules.test.js && node test/commission-rules.test.js && node test/report.test.js && node test/finance.test.js && node test/payables.test.js && node test/commission.test.js && node test/journal.test.js && node test/target-tracker.test.js && node test/appointments.test.js && node test/patients.test.js && node test/meta-parse.test.js && node test/meta-sync.test.js && node test/contact-centre.test.js && node test/ucm-cdr.test.js && node test/doctors.test.js && node test/inventory.test.js && node test/procurement.test.js && node test/admin-status.test.js && node test/doctor-commission.test.js && node test/render.test.js",
+    "test": "node test/rules.test.js && node test/sheet.test.js && node test/mcp.test.js && node test/export.test.js && node test/finance-rules.test.js && node test/commission-rules.test.js && node test/report.test.js && node test/sync-window.test.js && node test/finance.test.js && node test/payables.test.js && node test/commission.test.js && node test/journal.test.js && node test/target-tracker.test.js && node test/appointments.test.js && node test/patients.test.js && node test/meta-parse.test.js && node test/meta-sync.test.js && node test/contact-centre.test.js && node test/ucm-cdr.test.js && node test/doctors.test.js && node test/inventory.test.js && node test/procurement.test.js && node test/admin-status.test.js && node test/doctor-commission.test.js && node test/tgc-bootstrap.test.js && node test/tgc-odoo.test.js && node test/cc-bootstrap.test.js && node test/render.test.js",
     "sync-meta": "node scripts/sync-meta.js",
     "verify-meta": "node scripts/verify-supermetrics.js",
     "seed-pbx": "node scripts/import-report-html.js"

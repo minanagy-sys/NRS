@@ -25,6 +25,13 @@
       icon: icon('<path d="M5 4v5a4 4 0 0 0 8 0V4"/><path d="M9 13v3a4 4 0 0 0 8 0v-2"/><circle cx="18" cy="9" r="2"/>'),
     },
     {
+      href: '/performance-kpis', label: 'Performance KPIs', hint: 'The eight KPIs and what they pay',
+      /* A target with an arrow in it. Sits directly after Doctors Performance
+         because it is what that report's numbers are being steered towards —
+         the same invoices, read as "did we move it" rather than "what was it". */
+      icon: icon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/>'),
+    },
+    {
       href: '/commercial-sales', label: 'Commercial Sales', hint: 'Revenue ex-package, mix, patients',
       /* Report 01, as its own report. Distinct from Sales above: that one is all
          invoices by doctor and target, this one is ex-package with the mix and the
@@ -40,21 +47,19 @@
       href: '/finance', label: 'Finance', hint: 'Collections, payables, stock',
       icon: icon('<path d="M3 7h14a3 3 0 0 1 3 3v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 7V6a2 2 0 0 1 2-2h9"/><circle cx="16" cy="13.5" r="1.3"/>'),
     },
-    /* TWO ENTRIES, DELIBERATELY, where there was one. They measure different
-       things on different bases — doctors against the approved target sheet in
-       INVOICED ex-VAT, branches against the commission policy in CASH COLLECTED
-       ex-VAT — and they are not expected to agree. As one report the page had
-       to spend a paragraph apologising for the fact; as two it is simply true.
-       Kept adjacent, because a reader looking for one often wants the other. */
+    /* ONE ENTRY, where there were two. Targets and Commission measure different
+       things on different bases — doctors against the approved sheet in INVOICED
+       ex-VAT, branches against the policy in CASH COLLECTED ex-VAT — and they
+       are still not expected to agree. They are now two halves of one report,
+       switched above the tabs, with the basis printed on every column: the
+       difference is better shown than filed under a second menu item.
+
+       `/commission` still resolves — it redirects here onto the commission half
+       — so the old link in somebody's bookmarks keeps working. */
     {
-      href: '/targets', label: 'Targets & Plan', hint: 'The sheet, doctors, the 2027 plan',
+      href: '/targets', label: 'Targets & Commission', hint: 'The plan, doctors, pools, payslips',
       /* A dial at three-quarters — pace against target is what this report is. */
       icon: icon('<path d="M12 20a8 8 0 1 1 8-8"/><line x1="12" y1="12" x2="17.5" y2="7.5"/><circle cx="12" cy="12" r="1.4"/>'),
-    },
-    {
-      href: '/commission', label: 'Commission & Payslips', hint: 'Branch pools, doctors, gates',
-      /* A banknote: this report is the one that ends in somebody being paid. */
-      icon: icon('<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><line x1="6" y1="12" x2="6.01" y2="12"/><line x1="18" y1="12" x2="18.01" y2="12"/>'),
     },
     {
       href: '/commercial', label: 'Commercial', hint: 'The funnel, end to end',

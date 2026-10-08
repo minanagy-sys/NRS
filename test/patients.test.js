@@ -168,10 +168,33 @@ const f = (n) => Math.round(Number(n || 0)).toLocaleString('en-US');
     }
   });
 
-  await check('ex-VAT is below inc-VAT for every patient', () => {
-    for (const p of t.patients) {
-      assert.ok(p.exVat <= p.incVat + 0.01, `${p.patientId}: ex ${p.exVat} > inc ${p.incVat}`);
-    }
+  /* It used to assert ex-VAT <= inc-VAT for EVERY patient. That is not a rule
+     of this data: a refund or a gift-card line that CARRIES VAT, set against
+     treatments that carry none, makes a patient's net ex-VAT exceed net
+     inc-VAT — correctly. Both turned up in real Odoo data (RCFC/2026/00007, a
+     refund with VAT against two VAT-free invoices; INV/2026/1498, a −1,000
+     gift card with VAT on a VAT-free Novuma treatment). What the check was
+     really for is catching the two columns SWAPPED, so it now asserts that,
+     and that every exception is explained by such a line rather than ignored. */
+  await check('VAT is net positive overall — the ex and inc columns are not swapped', () => {
+    const ex = t.patients.reduce((a, p) => a + p.exVat, 0);
+    const inc = t.patients.reduce((a, p) => a + p.incVat, 0);
+    assert.ok(ex < inc, `total ex ${f(ex)} >= total inc ${f(inc)}`);
+  });
+  await check('  and every patient whose ex-VAT exceeds inc-VAT has a VAT-bearing credit that explains it', async () => {
+    const odd = t.patients.filter((p) => p.exVat > p.incVat + 0.01).map((p) => Number(p.patientId));
+    if (!odd.length) return;
+    const from = new Date(`${t.basis.from}T00:00:00Z`);
+    const to = new Date(`${t.basis.to}T00:00:00Z`);
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT DISTINCT i."partnerId" AS p FROM "Invoice" i
+       WHERE i."partnerId" = ANY($1::int[]) AND i."invoiceDate" BETWEEN $2 AND $3
+         AND ( (i."moveType" = 'out_refund' AND i."amountTotal" > i."amountUntaxed" + 0.01)
+            OR EXISTS (SELECT 1 FROM "InvoiceLine" l WHERE l."invoiceOdooId" = i."odooId"
+                        AND l."priceTotal" < l."priceSubtotal" - 0.01) )`, odd, from, to);
+    const explained = new Set(rows.map((r) => Number(r.p)));
+    const unexplained = odd.filter((id) => !explained.has(id));
+    assert.strictEqual(unexplained.length, 0, `no VAT-bearing credit explains: ${unexplained.slice(0, 5).join(', ')}`);
   });
 
   await check('shares are fractions, and each set sums to 1', () => {

@@ -81,7 +81,16 @@
       if (!expectReply) return null;
       if (!res.ok && res.status !== 200) throw mcpError(`MCP replied HTTP ${res.status}`, 'transport');
 
-      const text = await res.text();
+      /* Reading the body is network too. A connection the MCP drops half-way
+         through a long reply throws HERE ("terminated: other side closed"),
+         outside the try around fetchRetry, and used to escape with no kind at
+         all — so the reader could not be told it was the connection. */
+      let text;
+      try {
+        text = await res.text();
+      } catch (e) {
+        throw mcpError(`The MCP closed the connection mid-reply: ${e.message}`, 'transport');
+      }
       const payload = parseBody(text);
       if (!payload) throw mcpError('MCP returned an empty reply.', 'transport');
       if (payload.error) {

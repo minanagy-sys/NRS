@@ -14,6 +14,9 @@ const Mcp = require('./mcp.js');
 const { prisma, dateOnly, num } = require('./db.js');
 
 const CHUNK = 500;
+/* Ids per `IN (…)`. Postgres refuses a statement with more than 32,767 bind
+   values; 10,000 leaves room for whatever else the WHERE carries. */
+const ID_CHUNK = 10000;
 const nameOf = (v) => (Array.isArray(v) ? v[1] : null);
 const idOf = (v) => (Array.isArray(v) ? v[0] : null);
 
@@ -50,6 +53,88 @@ async function fetchLines(session, moveIds) {
  * Replace everything in [from, to] with what the MCP reports right now.
  * Returns { invoices, lines, days }.
  */
+/**
+ * Replace one window of invoices and their lines, inside the caller's
+ * transaction. Lifted out of syncRange on 2026-10-07 so the database half of a
+ * sync can be tested without Odoo — the half that broke.
+ */
+async function replaceInvoiceWindow(tx, { from, to, invoices, lines, byProduct, moveIds }) {
+  /* Wholesale replacement: an invoice that was un-posted must disappear, and
+     deleting the parent cascades to its lines.
+
+     The delete matches the ids we are about to write as WELL as the date
+     window, and that second clause is load-bearing rather than defensive.
+     Odoo corrects invoice dates after the fact — the premise this whole cache
+     is built on. When a correction moves a date ACROSS the window boundary the
+     old row sits outside the range being cleared, survives it, and the insert
+     then dies on the odooId unique constraint, taking the entire sync down.
+
+     Seen for real on 2026-09-01: INV/2026/5479 and INV/2026/5358 were held at
+     2026-09-01 while Odoo had already moved them to 16 and 9 August, so a
+     1-31 August sync failed outright. Deleting by date alone cannot reach
+     them, because the stale date is the very thing that is wrong. */
+  const fetchedIds = invoices.map((m) => m.id);
+  /* TWO DELETES, AND THE IDS IN CHUNKS. This was one `OR` with every
+     fetched id inline, and Postgres takes at most 32,767 bind values in a
+     statement: a year-to-date sync fetches ~43,500 invoices, so the delete
+     was refused and every "Year to date → Sync now" failed — reported to
+     the reader as "Could not reach the MCP", which it never was. Deleting
+     the window, then each chunk of ids, removes exactly the same rows. */
+  await tx.invoice.deleteMany({ where: { invoiceDate: { gte: dateOnly(from), lte: dateOnly(to) } } });
+  for (let i = 0; i < fetchedIds.length; i += ID_CHUNK) {
+    await tx.invoice.deleteMany({ where: { odooId: { in: fetchedIds.slice(i, i + ID_CHUNK) } } });
+  }
+
+  for (let i = 0; i < invoices.length; i += CHUNK) {
+    await tx.invoice.createMany({
+      data: invoices.slice(i, i + CHUNK).map((m) => ({
+        odooId: m.id,
+        name: m.name || '',
+        invoiceDate: dateOnly(m.invoice_date),
+        moveType: m.move_type,
+        state: m.state,
+        branchId: idOf(m.branch_id),
+        branchName: nameOf(m.branch_id),
+        specialistId: idOf(m.specialist_id),
+        specialistName: nameOf(m.specialist_id),
+        partnerId: idOf(m.partner_id),
+        partnerName: nameOf(m.partner_id),
+        amountUntaxed: m.amount_untaxed ?? 0,
+        amountTotal: m.amount_total ?? 0,
+        isNewCustomer: !!m.is_new_customer,
+        /* "Package sale journal" is 7.1% of August revenue and carries no VAT
+           at all — packages are invoiced when SOLD, not when delivered. Kept
+           on the row so a report can exclude them and compare revenue with
+           collections on a like basis. */
+        journalId: idOf(m.journal_id),
+        journalName: nameOf(m.journal_id),
+      })),
+    });
+  }
+
+  const known = new Set(moveIds);
+  const lineRows = lines
+    .filter((l) => known.has(idOf(l.move_id) ?? l.move_id))
+    .map((l) => {
+      const p = byProduct.get(idOf(l.product_id));
+      return {
+        odooId: l.id,
+        invoiceOdooId: idOf(l.move_id) ?? l.move_id,
+        productId: idOf(l.product_id),
+        productName: p ? p.display_name : nameOf(l.product_id),
+        categoryId: p ? idOf(p.categ_id) : null,
+        categoryName: p ? nameOf(p.categ_id) : null,
+        quantity: l.quantity ?? 0,
+        priceSubtotal: l.price_subtotal ?? 0,
+        priceTotal: l.price_total ?? 0,
+      };
+    });
+
+  for (let i = 0; i < lineRows.length; i += CHUNK) {
+    await tx.invoiceLine.createMany({ data: lineRows.slice(i, i + CHUNK) });
+  }
+}
+
 async function syncRange({ token, from, to, trigger = 'manual', actor = null }) {
   const run = await prisma.syncRun.create({
     data: { fromDate: dateOnly(from), toDate: dateOnly(to), trigger, actor },
@@ -67,80 +152,8 @@ async function syncRange({ token, from, to, trigger = 'manual', actor = null }) 
       : [];
     const byProduct = new Map(products.map((p) => [p.id, p]));
 
-    await prisma.$transaction(async (tx) => {
-      /* Wholesale replacement: an invoice that was un-posted must disappear, and
-         deleting the parent cascades to its lines.
-
-         The delete matches the ids we are about to write as WELL as the date
-         window, and that second clause is load-bearing rather than defensive.
-         Odoo corrects invoice dates after the fact — the premise this whole cache
-         is built on. When a correction moves a date ACROSS the window boundary the
-         old row sits outside the range being cleared, survives it, and the insert
-         then dies on the odooId unique constraint, taking the entire sync down.
-
-         Seen for real on 2026-09-01: INV/2026/5479 and INV/2026/5358 were held at
-         2026-09-01 while Odoo had already moved them to 16 and 9 August, so a
-         1-31 August sync failed outright. Deleting by date alone cannot reach
-         them, because the stale date is the very thing that is wrong. */
-      const fetchedIds = invoices.map((m) => m.id);
-      await tx.invoice.deleteMany({
-        where: {
-          OR: [
-            { invoiceDate: { gte: dateOnly(from), lte: dateOnly(to) } },
-            ...(fetchedIds.length ? [{ odooId: { in: fetchedIds } }] : []),
-          ],
-        },
-      });
-
-      for (let i = 0; i < invoices.length; i += CHUNK) {
-        await tx.invoice.createMany({
-          data: invoices.slice(i, i + CHUNK).map((m) => ({
-            odooId: m.id,
-            name: m.name || '',
-            invoiceDate: dateOnly(m.invoice_date),
-            moveType: m.move_type,
-            state: m.state,
-            branchId: idOf(m.branch_id),
-            branchName: nameOf(m.branch_id),
-            specialistId: idOf(m.specialist_id),
-            specialistName: nameOf(m.specialist_id),
-            partnerId: idOf(m.partner_id),
-            partnerName: nameOf(m.partner_id),
-            amountUntaxed: m.amount_untaxed ?? 0,
-            amountTotal: m.amount_total ?? 0,
-            isNewCustomer: !!m.is_new_customer,
-            /* "Package sale journal" is 7.1% of August revenue and carries no VAT
-               at all — packages are invoiced when SOLD, not when delivered. Kept
-               on the row so a report can exclude them and compare revenue with
-               collections on a like basis. */
-            journalId: idOf(m.journal_id),
-            journalName: nameOf(m.journal_id),
-          })),
-        });
-      }
-
-      const known = new Set(moveIds);
-      const lineRows = lines
-        .filter((l) => known.has(idOf(l.move_id) ?? l.move_id))
-        .map((l) => {
-          const p = byProduct.get(idOf(l.product_id));
-          return {
-            odooId: l.id,
-            invoiceOdooId: idOf(l.move_id) ?? l.move_id,
-            productId: idOf(l.product_id),
-            productName: p ? p.display_name : nameOf(l.product_id),
-            categoryId: p ? idOf(p.categ_id) : null,
-            categoryName: p ? nameOf(p.categ_id) : null,
-            quantity: l.quantity ?? 0,
-            priceSubtotal: l.price_subtotal ?? 0,
-            priceTotal: l.price_total ?? 0,
-          };
-        });
-
-      for (let i = 0; i < lineRows.length; i += CHUNK) {
-        await tx.invoiceLine.createMany({ data: lineRows.slice(i, i + CHUNK) });
-      }
-    }, { timeout: 120_000 });
+    await prisma.$transaction((tx) => replaceInvoiceWindow(tx, { from, to, invoices, lines, byProduct, moveIds }),
+      { timeout: 120_000 });
 
     // One row per day per pull — this is what turns "154 invoices when first
     // pulled, 186 now" from a hand-written note into tracked history.
@@ -273,14 +286,12 @@ async function syncAppointments({ token, from, to, base = process.env.MCP_BASE_U
   let written = 0;
   await prisma.$transaction(async (tx) => {
     const ids = data.map((d) => d.odooId);
-    await tx.appointment.deleteMany({
-      where: {
-        OR: [
-          { date: { gte: dateOnly(from), lte: dateOnly(to) } },
-          ...(ids.length ? [{ odooId: { in: ids } }] : []),
-        ],
-      },
-    });
+    /* Same bind-limit trap as the invoices: a long range carries more ids
+       than one statement may hold. The window, then the ids in chunks. */
+    await tx.appointment.deleteMany({ where: { date: { gte: dateOnly(from), lte: dateOnly(to) } } });
+    for (let i = 0; i < ids.length; i += ID_CHUNK) {
+      await tx.appointment.deleteMany({ where: { odooId: { in: ids.slice(i, i + ID_CHUNK) } } });
+    }
     for (let i = 0; i < data.length; i += CHUNK) {
       const made = await tx.appointment.createMany({ data: data.slice(i, i + CHUNK) });
       written += made.count;
@@ -300,4 +311,33 @@ async function syncAppointments({ token, from, to, base = process.env.MCP_BASE_U
   };
 }
 
-module.exports = { syncRange, syncStock, syncAppointments };
+/**
+ * What to tell the reader when a sync fails — by the layer that failed.
+ *
+ * Every failure used to fall through to "Could not reach the MCP", including
+ * NRS's own database errors. On 2026-10-07 that sent people retrying a
+ * year-to-date sync a dozen times over a fault that was in this file and
+ * nowhere near the MCP. The detail still goes only to the server log; the
+ * reader gets which layer, and what to do.
+ *
+ * A sync is one transaction, so a failure changes nothing: the figures shown
+ * are still the last good pull, and every message here can say so.
+ */
+function explainSyncError(e, { again = 'Refresh' } = {}) {
+  const k = e && e.kind;
+  if (k === 'token') return [401, `Your sign-in has expired. Sign out, sign in again, then ${again}.`];
+  if (k === 'odoo') {
+    return [503, 'The MCP is up but Odoo is not answering it. Nothing was changed — the figures shown '
+      + `are the last good pull. Try ${again} again shortly.`];
+  }
+  if (k === 'transport') {
+    return [502, 'Could not reach the MCP, or it dropped the connection. Nothing was changed — the '
+      + `figures shown are the last good pull. Try ${again} again shortly.`];
+  }
+  if (k === 'mcp') return [502, 'The MCP answered with an error. Nothing was changed. The server log has the detail.'];
+  /* No kind: the failure was not in the MCP or Odoo at all, but here. */
+  return [500, 'The sync failed inside NRS itself — not the MCP and not Odoo. Nothing was changed; '
+    + 'the figures shown are the last good pull. The server log has the detail.'];
+}
+
+module.exports = { syncRange, syncStock, syncAppointments, explainSyncError, replaceInvoiceWindow };

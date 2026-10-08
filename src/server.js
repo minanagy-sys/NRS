@@ -153,6 +153,7 @@ async function build({ contactCentreGate = true } = {}) {
   await app.register(require('./routes/marketing.js'));
   await app.register(require('./routes/contact-centre.js'));
   await app.register(require('./routes/doctors.js'));
+  await app.register(require('./routes/performance-kpis.js'));
   await app.register(require('./routes/inventory.js'));
   await app.register(require('./routes/procurement.js'));
   await app.register(require('./routes/commission.js'));

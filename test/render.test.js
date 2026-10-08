@@ -2234,7 +2234,16 @@ async function get2(url) {
     const REPORTS = ['report', 'doctors', 'inventory', 'procurement', 'marketing',
       'targets', 'commission', 'commercial', 'commercial-sales', 'contact-centre', 'patients'];
     const bad = [];
+    /* KNOWN EXCEPTIONS, added 2026-10-07 with the merged Targets & Commission
+       and the ported Contact Centre dashboards. Both run the original
+       standalone dashboard scripts unchanged (public/tgc.js, public/cc-dash.js
+       through their shims), and those scripts bring their own control bar. The
+       cost, stated so it is a decision rather than a drift: neither page has
+       the shared bar's Sign out button. Named one by one — any OTHER page that
+       drops the bar still fails here. */
+    const OWN_BAR = new Set(['targets', 'contact-centre']);
     for (const name of REPORTS) {
+      if (OWN_BAR.has(name)) continue;
       const view = fs.readFileSync(`${path}/src/views/${name}.html`, 'utf8');
       const bar = /<div class="cbar"([^>]*)>([\s\S]*?)\n<\/div>/.exec(view);
       if (!bar) { bad.push(`${name}: no .cbar at all`); continue; }
@@ -2251,7 +2260,7 @@ async function get2(url) {
         if (view.includes(id)) bad.push(`${name}: still hand-writes ${id}`);
       }
     }
-    ok(`all ${REPORTS.length} reports declare the shared bar instead of writing one`,
+    ok(`all ${REPORTS.length - OWN_BAR.size} reports that use it declare the shared bar instead of writing one`,
       bad.length === 0, bad.join(' · '));
 
     const cbar = fs.readFileSync(`${path}/public/cbar.js`, 'utf8');

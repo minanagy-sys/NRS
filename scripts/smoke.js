@@ -38,7 +38,7 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
   /* The pages too — a signed-in navigation must return the report, not signin. */
   /* Every live report. `/commission` was missing until 2026-10-04 — the page
      shipped and was never loaded here. */
-  for (const u of ['/', '/targets', '/commission', '/commercial', '/commercial-sales', '/marketing', '/contact-centre', '/doctors', '/inventory', '/procurement', '/admin']) {
+  for (const u of ['/', '/targets', '/commission', '/commercial', '/commercial-sales', '/marketing', '/contact-centre', '/performance-kpis', '/doctors', '/inventory', '/procurement', '/admin']) {
     const res = await app.inject({ method: 'GET', url: u });
     const title = (res.payload.match(/<title>([^<]*)<\/title>/) || [])[1] || '(none)';
     const tabs = (res.payload.match(/data-panel="/g) || []).length;
@@ -74,6 +74,12 @@ const { prisma } = require(path.join(ROOT, 'src', 'lib', 'db.js'));
     '/api/pbx/extensions',
     /* What the weekly lock is waiting for. Always 200, locked or not. */
     '/api/contact-centre/gate',
+    /* The merged Targets & Commission, the ported Contact Centre, Performance KPIs. */
+    '/api/tgc/bootstrap',
+    '/api/tgc/reference',
+    '/api/cc/bootstrap',
+    '/api/cc/ucm',
+    '/api/kpi/config',
     /* The uploads tab reads this to show what is held and what has been loaded. */
     '/api/uploads',
     /* The schemes behind every payslip, and the doctors on them. Admin draws

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Performance KPIs &middot; Nouvelage</title>
+<link rel="stylesheet" href="/assets/fonts/fonts.css">
+<!-- NOT app.css. See the note at the top of kpi.css. -->
+<link rel="stylesheet" href="/assets/kpi.css">
+</head>
+<body>
+<header class="header">
+ <div class="brand">Nouvelage · Performance · Odoo 18</div>
+ <h1>Performance KPIs<em>what moves the target, every day</em></h1>
+ <p class="header-sub">The numbers behind the revenue target, live from Odoo for the period you pick. Each KPI is graded on the commission ladder: 80 · 85 · 90 · 95 · 100%.</p>
+ <div class="hero" id="hero"></div>
+ <div class="gpanel">
+  <div class="seg" id="seg"></div>
+  <div class="grow"><div class="gdates"><span class="gl">FROM</span><input type="date" id="dFrom" aria-label="From"><span class="arrow">→</span><span class="gl">TO</span><input type="date" id="dTo" aria-label="To"></div><button class="gbtn pri" id="go">Show</button><span class="gday" id="gday"></span></div>
+  <div class="grow" style="align-items:flex-end;gap:8px 18px">
+   <div class="fgrp"><span class="lab">Brand</span><div class="pills" id="fBrand"></div></div>
+   <div class="fgrp"><span class="lab">Branch</span><select class="gsel" id="fBranch"></select></div>
+   <div class="fgrp"><span class="lab">Goal tier</span><div class="pills" id="fTier"></div></div>
+  </div>
+  <div class="gfoot"><span class="gsync"><i id="syncDot"></i><span id="sync">not synced yet</span></span><button class="gbtn" id="syncNow">↻ Sync now</button><button class="gbtn" id="exp">↓ Export</button><button class="gbtn" id="editBtn" hidden>✎ Edit</button><button class="gbtn pri" id="saveBtn" hidden>Save</button><button class="gbtn" id="cancelBtn" hidden>Cancel</button></div>
+ </div>
+</header>
+<div class="tabs-wrap"><div class="tabs" id="tabs">
+ <button class="tab active" data-p="r"><span class="tab-num">00</span>Revenue map</button>
+ <button class="tab" data-p="k"><span class="tab-num">01</span>KPIs</button>
+ <button class="tab" data-p="b"><span class="tab-num">02</span>By branch</button>
+ <button class="tab" data-p="f"><span class="tab-num">03</span>Forecast & commission</button>
+ <button class="tab" data-p="m"><span class="tab-num">04</span>Media & leads</button>
+ <button class="tab" data-p="h"><span class="tab-num">05</span>How it's measured</button>
+</div></div>
+
+<div class="panel active" id="r"><section>
+ <div class="kicker">00 — Revenue map · how we get to target</div>
+ <div class="rungs" id="rTop"></div>
+ <div class="note ar" id="rIntro"></div>
+ <h2>Every lever we can pull, and its weight in the target</h2>
+ <div class="tblw"><table id="rTbl"><thead><tr><th>#</th><th>Lever</th><th>Type</th><th>From</th><th>To</th><th>Monthly impact</th><th>Target reach</th><th>Tracked in</th></tr></thead><tbody></tbody></table></div>
+ <div id="rDesc"></div>
+ <h2>Paying patients needed per month</h2>
+ <div class="tblw"><table id="pTbl"><thead><tr><th>Month</th><th>Target</th><th>Patients @ 4,600 / patient</th><th>Patients @ 5,000 / patient</th><th>Gap vs today (~4,000)</th></tr></thead><tbody></tbody></table></div>
+ <div class="note ar" id="pNote"></div>
+</section></div>
+
+<div class="panel" id="k"><section>
+ <div class="kicker">01 — KPIs vs target ladder</div>
+ <div class="note err" id="msg" hidden></div>
+ <div class="grid" id="cards"></div>
+ <div class="note ar" style="margin-top:16px"><b>إزاي تقرا الكارت:</b> الرقم الكبير هو اللي حصل في الفترة دي. الخانة المظلّلة في السلّم هي أعلى مستوى وصلناله. «الحالي» هو نقطة البداية اللي اتقاسنا منها أول أكتوبر، و«100%» هو الرقم اللي يغطي تارجت الفروع (23.2 مليون/شهر).</div>
+</section></div>
+
+<div class="panel" id="b"><section>
+ <div class="kicker">02 — By branch · same period</div>
+ <p class="meta" id="bMeta" style="margin-bottom:10px"></p>
+ <div class="tblw"><table id="bTbl"><thead><tr><th>Branch</th><th>Revenue (billed)</th><th>Invoices</th><th>Avg invoice</th><th>Laser sessions / patient (6 mo)</th><th>Appointments not closed</th></tr></thead><tbody></tbody></table></div>
+ <div class="note ar">«Appointments not closed» = مواعيد عدّى ميعادها وفضلت Draft أو Confirmed. ده مش No-show بالظبط، بس هو اللي بيخبّيه. كل ما الرقم ده يقل، الـ No-show بيبقى متقاس صح.</div>
+</section></div>
+
+<div class="panel" id="f"><section>
+ <div class="kicker">03 — Forecast · if the KPIs hit each tier, what does the month bring?</div>
+ <div class="chips"><span class="meta">Target month</span><select id="fMonth" style="border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:6px;padding:7px 10px"></select><span class="meta" id="fMeta"></span></div>
+ <div class="rungs" id="fRungs"></div>
+ <div class="note ar" id="fNow"></div>
+ <h2>Branch by branch</h2>
+ <div class="tblw"><table id="fTbl"><thead></thead><tbody></tbody></table></div>
+ <div class="note ar"><b>إزاي اتحسب:</b> الـ KPIs اتحطت تارجتسها بحيث كل مستوى منها يجيب نفس النسبة من تارجت الفروع. يعني لو الـ KPIs وصلت 90%، كل فرع متوقع يحقق 90% من تارجته الشهري. الكومشن هنا هو <b>Branch pool</b> من سياسة الكومشن في شيت التارجت: إيراد الفرع بيحدد الشريحة، والإنجاز بيحدد المستوى، وتحت 80% مفيش كومشن. الأرقام قبل مضاعفات الخدمات (ليزر ×1.2، حقن ×1.15، جسم ×1.25)، ومن غير كومشن الدكاترة والكول سنتر.</div>
+ <div class="note ar"><b>تنبيه:</b> التوقع مبني على معدل الأيام اللي فاتت من نفس الشهر (MTD ÷ الأيام × أيام الشهر)، مش على الشهر اللي قبله. التارجت والكومشن محسوبين على «Collected»، والصفحة بتقرأ «Billed» من الفواتير، فالرقمين قريبين بس مش متطابقين.</div>
+</section></div>
+
+<div class="panel" id="m"><section>
+ <div class="kicker">04 — Media & leads · Jan – Sep 2026 (Meta exports)</div>
+ <div class="grid" id="mCards"></div>
+ <h2>Spend by ad account</h2>
+ <div class="tblw"><table id="mTbl"><thead><tr><th>Account</th><th>Spend (EGP)</th><th>Lead forms</th><th>Cost / lead</th><th>Messages</th><th>Cost / message</th><th>Profile visits</th></tr></thead><tbody></tbody></table></div>
+ <h2>Form leads per month</h2>
+ <div class="card"><div class="vbars" id="vb"></div><p class="meta">Laser forms (Nouvelage + ZAT), doctor forms (Dr Mai, Dr Randa, Dr Ghada, Dr Poussy), ZAT June campaign. October is partial.</p></div>
+ <h2>Do form leads become patients?</h2>
+ <div class="note ar"><b>عيّنة: 120 ليد من فورمز يوليو وأغسطس، اتدوّر عليهم برقم الموبايل في Odoo.</b><br>
+ • 11 منهم بس (9%) موجودين في Odoo كعملاء أصلاً.<br>
+ • 4 بس (3%) عليهم فواتير، وجزء منهم كان عميل قبل الإعلان.<br>
+ يعني حوالي 9 من كل 10 ليدز من الفورم مش بتوصل Odoo خالص بنفس الرقم. يا إما محدش كلمهم، يا إما اتسجلوا برقم أو اسم مختلف. ده بيوضح ليه زيادة الصرف ما بتزوّدش المرضى: الليدز بتقع قبل ما توصل للعيادة.<br>
+ <b>العينة صغيرة (120 من 5,968)،</b> فالنسب تقريبية. القياس الدقيق محتاج إن كل ليد يدخل Odoo بمصدره (KPI رقم 7).</div>
+</section></div>
+
+<div class="panel" id="h"><section>
+ <div class="kicker">05 — How each KPI is measured</div>
+ <div class="tblw"><table><thead><tr><th>KPI</th><th>Formula (Odoo)</th><th>Window</th></tr></thead><tbody id="hTbl"></tbody></table></div>
+ <div class="note ar"><b>السلّم (80 → 100%):</b> «100%» هو الرقم اللي لو اتحقق، الثغرة بتقفل حوالي نص الفجوة بينها وبين أحسن مستوى، وده اللي يغطي تارجت الفروع. المستويات اللي في النص بتتحسب بنفس نسب الإيراد: 80% = نفس الحالي، 85% = 9% من المسافة، 90% = 39%، 95% = 70%، 100% = المسافة كلها. مؤشرات الليدز (7 و 8) السلّم فيها هو النسبة نفسها.</div>
+ <div class="note ar"><b>حدود القياس:</b> فواتير Odoo بتتسجل متأخر يوم أو اتنين، فأرقام النهارده وامبارح مبدئية. «مرضى رجعوا» محسوبة من يناير 2026 بس (قبلها مفيش فواتير في Odoo 18). الإيراد هنا «Billed» من الفواتير، مش «Collected» زي شيت التارجت.</div>
+</section></div>
+<div class="foot">Nouvelage · Performance KPIs · Odoo 18 live · media snapshot Jan–Sep 2026</div>
+
+<script type="application/json" id="cfg">{}</script>
+
+<!-- The dashboard's own script, lines 188-446 of the original, unchanged.
+
+     It reads its own `#cfg` blob at load, so kpi-shim.js fills that element
+     from the database BEFORE this script is evaluated, and the script then
+     finds exactly what it expects. `nav.js` injects the shared sidebar. -->
+<script src="/assets/nav.js"></script>
+<script src="/assets/kpi-shim.js"></script>
+</body>
+</html>

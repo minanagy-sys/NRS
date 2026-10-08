@@ -363,5 +363,120 @@ async function syncCollections({ token, from, to, base = process.env.MCP_BASE_UR
   };
 }
 
-module.exports = { syncPayables, syncCollections };
+/** The package journal. Odoo id, not a name — names get edited, ids do not. */
+const PACKAGE_JOURNAL = 116;
+
+/**
+ * Pull package sales and settlements into `PackageDay`.
+ *
+ * WITHOUT THIS EVERY BRANCH'S "COLLECTED" IS WRONG. The targets report does not
+ * read cash in; it reads
+ *
+ *     (cash in − refunds − package sales + package used) ÷ 1.14
+ *
+ * because a package is paid up front and delivered over months. With these two
+ * terms missing they silently evaluate to zero, so a branch that sold a package
+ * today looks like it collected the whole price, and one working through
+ * packages sold months ago looks like it collected nothing. On one ordinary day
+ * that put Loran 1,447 under and Roushdy 3,290 over.
+ *
+ * Deliberately a SEPARATE function from syncCollections rather than another
+ * query inside it: these are invoices and journal entries, not payments, and
+ * folding them in would mean one failure takes out both.
+ */
+async function syncPackages({ token, from, to, base = process.env.MCP_BASE_URL }) {
+  const session = await Mcp.connect({ base, token });
+
+  const [sales, settlements] = await Promise.all([
+    /* Package invoices. `amount_residual_signed` is the unpaid part, which the
+       report nets off — an unpaid package has taken no cash, so it should not
+       be deducted from what the branch collected. */
+    session.callKw('account.move', 'search_read', [[
+      ['invoice_date', '>=', from],
+      ['invoice_date', '<=', to],
+      ['state', '=', 'posted'],
+      ['move_type', 'in', ['out_invoice', 'out_refund']],
+      ['journal_id', '=', PACKAGE_JOURNAL],
+    ], ['id', 'invoice_date', 'branch_id', 'amount_total_signed', 'amount_residual_signed']],
+    { limit: 0, order: 'invoice_date asc, id asc' }),
+
+    /* Settlements are journal ENTRIES, not invoices: the accounting move that
+       recognises a slice of a package as it is delivered. */
+    session.callKw('account.move', 'search_read', [[
+      ['date', '>=', from],
+      ['date', '<=', to],
+      ['state', '=', 'posted'],
+      ['move_type', '=', 'entry'],
+      ['pkg_settled_amount', '>', 0],
+    ], ['id', 'date', 'branch_id', 'pkg_settled_amount']],
+    { limit: 0, order: 'date asc, id asc' }),
+  ]);
+
+  const NO_BRANCH = 'Unassigned';
+  const buckets = new Map();
+  const bucket = (date, branch) => {
+    const key = `${date}|${branch}`;
+    const b = buckets.get(key)
+      || { date, branch, saleTotal: 0, saleResidual: 0, settled: 0, sales: 0, settlements: 0 };
+    buckets.set(key, b);
+    return b;
+  };
+
+  const noBranch = { sales: 0, settlements: 0, amount: 0 };
+  for (const m of sales) {
+    const branch = nameOf(m.branch_id) || NO_BRANCH;
+    if (!nameOf(m.branch_id)) { noBranch.sales += 1; noBranch.amount = r2(noBranch.amount + (m.amount_total_signed || 0)); }
+    const b = bucket(String(m.invoice_date).slice(0, 10), branch);
+    b.saleTotal = r2(b.saleTotal + (m.amount_total_signed || 0));
+    b.saleResidual = r2(b.saleResidual + (m.amount_residual_signed || 0));
+    b.sales += 1;
+  }
+  for (const m of settlements) {
+    const branch = nameOf(m.branch_id) || NO_BRANCH;
+    if (!nameOf(m.branch_id)) { noBranch.settlements += 1; }
+    const b = bucket(String(m.date).slice(0, 10), branch);
+    b.settled = r2(b.settled + (m.pkg_settled_amount || 0));
+    b.settlements += 1;
+  }
+
+  const rows = [...buckets.values()].map((b) => ({
+    date: dateOnly(b.date),
+    branchName: b.branch,
+    saleTotal: r2(b.saleTotal).toFixed(2),
+    saleResidual: r2(b.saleResidual).toFixed(2),
+    settled: r2(b.settled).toFixed(2),
+    sales: b.sales,
+    settlements: b.settlements,
+    source: 'odoo',
+  }));
+
+  /* Replace only this window's Odoo rows, as syncCollections does, so a
+     re-sync cannot double anything. */
+  let written = 0;
+  await prisma.$transaction(async (tx) => {
+    await tx.packageDay.deleteMany({
+      where: { source: 'odoo', date: { gte: dateOnly(from), lte: dateOnly(to) } },
+    });
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const made = await tx.packageDay.createMany({ data: rows.slice(i, i + CHUNK) });
+      written += made.count;
+    }
+  }, { timeout: 120000 });
+
+  const sum = (arr, f) => r2(arr.reduce((a, x) => a + (f(x) || 0), 0));
+  return {
+    from,
+    to,
+    salesFound: sales.length,
+    settlementsFound: settlements.length,
+    rowsWritten: written,
+    saleTotal: sum(sales, (m) => m.amount_total_signed),
+    saleResidual: sum(sales, (m) => m.amount_residual_signed),
+    settled: sum(settlements, (m) => m.pkg_settled_amount),
+    branches: new Set(rows.map((r) => r.branchName)).size,
+    noBranch,
+  };
+}
+
+module.exports = { syncPayables, syncCollections, syncPackages };
 

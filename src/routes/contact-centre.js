@@ -22,6 +22,8 @@ const path = require('path');
 const CC = require('../lib/contact-centre.js');
 const Gate2 = require('../lib/cc-gate.js');
 const UCM = require('../lib/ucm-cdr.js');
+const CcBootstrap = require('../lib/cc-bootstrap.js');
+const Mcp = require('../lib/mcp.js');
 const Gate = require('../lib/admin-gate.js');
 const { prisma } = require('../lib/db.js');
 const { iso } = require('../lib/rules.js');
@@ -121,6 +123,117 @@ module.exports = async function (app) {
     const out = await UCM.commit(parsed, { filename, actor: (req.user && (req.user.email || req.user.subject)) || null });
     await app.audit(req, 'ucm-upload', `${filename || 'file'}: ${out.calls} calls, weeks ${out.weeks.join(', ')}`);
     return { ...out, gate: await Gate2.state() };
+  });
+
+  /* ---------- the ported dashboard ----------
+     The page runs the standalone Contact Centre dashboard's own script
+     unchanged (public/cc-dash.js). These three endpoints are what that script
+     reaches for, mapped onto this project's tables. See public/cc-shim.js. */
+
+  /** `DATA`, `APPT` and `CRM` — the three constants the script opens expecting. */
+  app.get('/api/cc/bootstrap', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async () => CcBootstrap.build());
+
+  /**
+   * The phone data, in the shape the script's store adapter reads.
+   *
+   * The script keeps this in a document store: `ucm_weeks`, `ucm_calls` and an
+   * extension map. Here it is `PbxCall` and `PbxExtension`, which is why the
+   * shim serves a store rather than letting the script fall back to its own
+   * in-memory one — that fallback accepts an upload and loses it on reload.
+   */
+  app.get('/api/cc/ucm', { preHandler: app.requireUser }, async () => {
+    const [calls, weeks, ext] = await Promise.all([
+      prisma.pbxCall.findMany({ orderBy: [{ date: 'asc' }, { hour: 'asc' }] }),
+      prisma.dataUpload.findMany({ where: { kind: 'ucm:upload' }, orderBy: { id: 'asc' } }),
+      prisma.pbxExtension.findMany({ orderBy: { ext: 'asc' } }),
+    ]);
+
+    /* One row per week, built from the calls themselves rather than from the
+       upload log: the gate asks how far the stored calls actually reach, and
+       an upload that was accepted but wrote a short week would otherwise
+       report the week it was filed under.
+
+       `end` IS THE WEEK'S LAST DAY, `last` IS THE LAST DAY WITH CALLS, and
+       they are deliberately not the same field. The page prints
+       "start → end" and appends "(calls to <last>)" only when `last` falls
+       short of `end` — so collapsing the two would make a week that stopped on
+       Thursday render as a complete week ending Thursday, which is precisely
+       the gap the caption exists to show. The gate reads `last` for the same
+       reason. */
+    const addDays = (s, n) => {
+      const d = new Date(`${s}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const byWeek = new Map();
+    for (const c of calls) {
+      const id = iso(c.weekStart);
+      const w = byWeek.get(id) || { id, start: id, end: addDays(id, 6), last: id, inbound: 0, outbound: 0 };
+      const d = iso(c.date);
+      if (d > w.last) w.last = d;
+      if (c.direction === 1) w.inbound += 1; else w.outbound += 1;
+      byWeek.set(id, w);
+    }
+    /* Which upload a week came from, matched by overlap rather than by start
+       date: an upload's range runs from its first CALL to its last, so a file
+       covering three weeks starts inside only one of them, and a file that
+       happens to begin mid-week starts inside none. The latest overlapping
+       upload wins, because a week re-uploaded is replaced whole. */
+    for (const w of byWeek.values()) {
+      const u = weeks.filter((x) => x.rangeFrom && x.rangeTo
+        && iso(x.rangeFrom) <= w.last && iso(x.rangeTo) >= w.start).pop();
+      if (u) { w.file = u.filename || ''; w.uploadedAt = u.createdAt; }
+    }
+
+    return {
+      weeks: [...byWeek.values()],
+      /* The ten columns of PbxCall are the script's call tuple, in order. */
+      calls: calls.map((c) => [
+        iso(c.date), c.hour, c.direction, c.ext, c.answered ? 1 : 0,
+        c.waitSec, c.talkSec, c.phoneHash || '', c.queue, c.status,
+      ]),
+      ext: ext.map((e) => [e.ext, e.phoneName || '', e.odooEmployee || '', e.team || 'other', e.branch || '']),
+    };
+  });
+
+  /**
+   * The script's live Odoo pull, proxied.
+   *
+   * It calls `odoo_search_records` through the MCP and reads `payload.records`.
+   * Only that one tool is forwarded, and only with the caller's own token — a
+   * general "run any MCP tool" endpoint behind a session cookie is a much
+   * larger thing to expose than this page needs.
+   */
+  app.post('/api/cc/odoo', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    if (guard(req, reply)) return reply;
+    const token = req.user && req.user.token;
+    if (!token) return reply.code(401).send({ error: 'Sign in again to pull from Odoo.' });
+    const b = req.body || {};
+    if (b.tool && b.tool !== 'odoo_search_records') {
+      return reply.code(400).send({ error: `Only odoo_search_records is forwarded, not ${b.tool}.` });
+    }
+    try {
+      const session = await Mcp.connect({ base: process.env.MCP_BASE_URL, token });
+      const payload = await session.callTool('odoo_search_records', {
+        model: str(b.model, 'Model', 80),
+        domain: Array.isArray(b.domain) ? b.domain : [],
+        fields: Array.isArray(b.fields) ? b.fields : [],
+        limit: Math.min(Number(b.limit) || 2000, 2000),
+        offset: Number(b.offset) || 0,
+        order: str(b.order, 'Order', 60) || 'id asc',
+      });
+      return { payload };
+    } catch (e) {
+      /* The script shows whatever message comes back, so the layer that failed
+         is named rather than flattened into "could not pull". */
+      return reply.code(e.kind === 'odoo' ? 502 : 503).send({ error: e.message, kind: e.kind || 'mcp' });
+    }
   });
 
   /* ---------- the extension map ---------- */

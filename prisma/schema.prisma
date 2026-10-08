@@ -1645,15 +1645,23 @@ model CcRebooking {
 /// `homeLogin` is the login this person is supposed to work under; using any
 /// other one is the cross-login finding on the Data quality panel.
 model CcEmployee {
-  name       String
-  department String   @default("")
-  jobTitle   String   @default("")
-  homeLogin  String   @default("")
+  name        String
+  department  String   @default("")
+  jobTitle    String   @default("")
+  homeLogin   String   @default("")
   /// Odoo user ids this person is allowed to act as.
-  allowedIds Int[]
-  active     Boolean  @default(true)
-  source     String   @default("seed")
-  loadedAt   DateTime @default(now())
+  allowedIds  Int[]
+  active      Boolean  @default(true)
+  /// How many Odoo employee records share this exact name.
+  ///
+  /// The primary key is the name, so two people called the same thing arrive
+  /// as one row here and the duplication would otherwise vanish on import.
+  /// The report's health panel calls these out ("N employee records with the
+  /// exact same name"), because a duplicate name is what makes a commission
+  /// land on the wrong person. Normally 1.
+  recordCount Int      @default(1)
+  source      String   @default("seed")
+  loadedAt    DateTime @default(now())
 
   @@id([name, source])
   @@index([department])
@@ -1727,4 +1735,207 @@ model PbxCall {
   @@index([weekStart])
   @@index([date])
   @@index([phoneHash])
+}
+
+/**
+ * ============================================================
+ * The merged Targets & Commission report — reference data that used to live
+ * inside the standalone dashboard as a 584 KB `const D`.
+ * Imported once by `scripts/import-artifact-plan.js` from
+ * `Targets Q4 2026 – 2027 · Nouvelage.html`. The approved target sheet itself
+ * is NOT here: `CommissionTarget` and `DoctorPlanMonth` already hold it, to the
+ * pound, and were checked against the file before any of this was written.
+ * ============================================================
+ */
+
+/// Daily revenue by branch for the months the Odoo cache does not reach back
+/// to. `HistoryMonth` is the same data summed; this is kept separately because
+/// the day view needs days, and re-deriving them from a month is not possible.
+model HistoryDay {
+  /// The invoice date.
+  date   DateTime @db.Date
+  name   String
+  ex     Decimal  @db.Decimal(14, 2)
+  source String   @default("artifact")
+
+  @@id([date, name])
+  @@index([date])
+}
+
+/// Daily revenue per doctor, with the branch and product type the invoices sat
+/// in. One row per (day, doctor, branch, product type) — the artifact carried
+/// this as a 5-tuple so the day view could break a doctor down without a
+/// second pull.
+model HistoryDayDoctor {
+  date        DateTime @db.Date
+  doctorName  String
+  branchName  String
+  productType String
+  ex          Decimal  @db.Decimal(14, 2)
+  invoices    Int      @default(0)
+  source      String   @default("artifact")
+
+  @@id([date, doctorName, branchName, productType])
+  @@index([date])
+  @@index([doctorName])
+}
+
+/// The plan's seasonal shape: how a branch's year splits across the twelve
+/// calendar months and the five service groups. Keyed by calendar month 1-12
+/// and deliberately year-agnostic — the same shape is reused for any future
+/// year, which is exactly how the dashboard used it.
+model PlanSeasonality {
+  branchName String
+  /// 1-12, calendar month.
+  month      Int
+  groupName  String
+  ex         Decimal @db.Decimal(14, 2)
+
+  @@id([branchName, month, groupName])
+  @@index([branchName])
+}
+
+/// How a service group splits into product types, per branch. Shares sum to 1
+/// within a group; the service-target panel multiplies a group target by these
+/// to get a product-type target.
+model PlanProductMix {
+  branchName  String
+  groupName   String
+  productType String
+  share       Decimal @db.Decimal(8, 6)
+
+  @@id([branchName, groupName, productType])
+  @@index([branchName])
+}
+
+/// What a given weekday is worth against an average day, measured from history.
+/// Friday is ~0.60 of a Tuesday, so spreading a monthly target evenly across
+/// elapsed days overstates a week that has just had one. Every pace, catch-up
+/// and forecast figure on the report divides by these.
+///
+/// `dow` is 0 = Monday … 6 = Sunday. The dashboard stored the same seven
+/// numbers under JavaScript's Sunday-first `getDay()` shifted by `(day+6)%7`;
+/// the shift is applied on import so the stored row means what it says.
+model WeekdayWeight {
+  dow    Int     @id
+  weight Decimal @db.Decimal(8, 4)
+}
+
+/// A doctor as the approved schedule describes them: which cohort they are
+/// scored in, which branches they work, and how their billing splits across
+/// service groups. Distinct from `DoctorPlanMonth`, which holds their numbers.
+model DoctorProfile {
+  name       String   @id
+  groupName  String?
+  department String?
+  /// Branch names, in the order the schedule lists them.
+  branches   String[]
+  /// { "Injectables": 0.957, "Laser": 0.01, … } — shares summing to 1.
+  mix        Json?
+  source     String   @default("artifact")
+  updatedAt  DateTime @updatedAt
+
+  shifts DoctorRosterSlot[]
+}
+
+/// One line of the weekly schedule: a doctor, a weekday, a branch and the
+/// hours they are on. The day plan divides a doctor's monthly target by their
+/// rostered hours, so a 13-hour Saturday carries more target than a 6-hour
+/// Tuesday.
+model DoctorRosterSlot {
+  id         Int     @id @default(autoincrement())
+  doctorName String
+  /// 0 = Sunday … 6 = Saturday, matching JavaScript's getDay().
+  dow        Int
+  branchName String
+  hours      Decimal @db.Decimal(5, 2)
+  startTime  String  @default("")
+  endTime    String  @default("")
+  department String  @default("")
+  source     String  @default("artifact")
+
+  doctor DoctorProfile @relation(fields: [doctorName], references: [name], onDelete: Cascade)
+
+  @@index([doctorName])
+  @@index([dow])
+  @@index([branchName])
+}
+
+/// An editable threshold on the Performance KPIs report.
+///
+/// The standalone dashboard kept these in a JSON blob inside its own HTML and
+/// saved by republishing the file. There is no file to rewrite here, so the
+/// eight rows live in a table and are injected back into the page's `#cfg`
+/// element on load — the script's own reader is untouched.
+///
+/// `base` is where the KPI measured when it was set; `t100` is the level that
+/// counts as fully met. Both are stored in the KPI's own unit (a rate like
+/// 0.146, or a count like 2.08), the same numbers the script compares against.
+model KpiThreshold {
+  /// Matches the `id` in the script's KPI list: laser, noshow, react, botox,
+  /// cross, consult, src, touch.
+  id        String   @id
+  base      Decimal? @db.Decimal(14, 6)
+  t100      Decimal? @db.Decimal(14, 6)
+  /// The one-line reason shown under the number.
+  why       String?
+  updatedAt DateTime @updatedAt
+}
+
+/// A row of the commission ladder on the Performance KPIs report.
+///
+/// Positional: the script reads `CFG.lev` by index and assigns over its own
+/// defaults, so `idx` is the position in that list and not an identifier of
+/// anything outside it.
+model KpiLevel {
+  idx       Int      @id
+  name      String   @default("")
+  nameAr    String   @default("")
+  /// "Internal" or "External".
+  scope     String   @default("")
+  /// Where it stands today, and where it should be — free text, as shown.
+  fromLabel String   @default("")
+  toLabel   String   @default("")
+  /// The pot attached to this level, in EGP. The editor types millions and
+  /// multiplies by 1e6 before saving, so this is already whole pounds.
+  value     Decimal  @default(0) @db.Decimal(14, 2)
+  /// Which KPI it is tied to, as printed ("KPI 1", "Tab 02", …).
+  kpiRef    String   @default("")
+  detail    String   @default("")
+  updatedAt DateTime @updatedAt
+}
+
+/// Package money per branch per day, which the targets report needs and the
+/// invoice and payment caches cannot supply.
+///
+/// WHY THIS EXISTS. "Collected" on that report is not simply cash in. A package
+/// is paid for up front and delivered over months, so the report computes
+///
+///     (cash in − refunds − package sales + package used) ÷ 1.14
+///
+/// Cash taken for treatment not yet given is SUBTRACTED, and added back as the
+/// patient consumes it. Without these two columns every branch is wrong by its
+/// package activity — Loran understated by 1,447, Roushdy overstated by 3,290
+/// on one ordinary day — and the error is invisible, because what is left still
+/// looks like a plausible number.
+///
+/// Both figures come from Odoo: sales are invoices on the package journal
+/// (116), settlements are journal entries carrying `pkg_settled_amount`.
+model PackageDay {
+  date         DateTime @db.Date
+  branchName   String
+  /// Package invoices raised that day, at full value...
+  saleTotal    Decimal  @default(0) @db.Decimal(14, 2)
+  /// ...and the part still unpaid. The report subtracts (saleTotal − saleResidual),
+  /// so an unpaid package costs the branch nothing until the money arrives.
+  saleResidual Decimal  @default(0) @db.Decimal(14, 2)
+  /// Package value consumed that day, added back as treatment is delivered.
+  settled      Decimal  @default(0) @db.Decimal(14, 2)
+  sales        Int      @default(0)
+  settlements  Int      @default(0)
+  source       String   @default("odoo")
+  loadedAt     DateTime @default(now())
+
+  @@id([date, branchName, source])
+  @@index([date])
 }

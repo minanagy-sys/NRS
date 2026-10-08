@@ -24,15 +24,202 @@ const page = (app, url, name) => app.get(url, async (req, reply) =>
 
 module.exports = async function (app) {
   page(app, '/targets', 'targets');
-  /* Commission & Payslips. A second page rather than more tabs on Targets: the
-     two measure different things on different bases — doctors against the
-     approved sheet in INVOICED revenue, branches against the policy in CASH
-     COLLECTED — and they are not expected to agree. Both read the same
-     endpoint, so the two halves can never describe different months. */
-  page(app, '/commission', 'commission');
+  /* MERGED 2026-10-06. Targets and Commission were two reports; they are now
+     two halves of one, switched by the control above the tabs. They always
+     measured different things on different bases — doctors against the approved
+     sheet in INVOICED revenue, branches against the policy in CASH COLLECTED,
+     and they are not expected to agree — which was the argument for keeping
+     them apart. Putting them under one switch with the basis on every column
+     makes that difference visible instead of merely separate.
+
+     The old URL is kept and redirected rather than dropped: it is in people's
+     bookmarks, and the page it pointed at is still here, one click away. */
+  app.get('/commission', async (req, reply) => reply.redirect('/targets#commission', 301));
   page(app, '/commercial', 'commercial');
   page(app, '/patients', 'patients');
   page(app, '/commercial-sales', 'commercial-sales');
+
+  /* --------------------------------------------- targets & commission --- */
+
+  /**
+   * `const D` and `const TGT`, rebuilt from Postgres.
+   *
+   * The merged report runs the standalone dashboard's own script rather than a
+   * re-implementation of it, and that script opens with two constants holding
+   * 584 KB of plan, history and roster. This is the same two objects, built
+   * from the tables the import filled, so nothing above line 454 of that script
+   * has to change.
+   */
+  app.get('/api/tgc/bootstrap', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    reply.header('Cache-Control', 'private, no-cache');
+
+    /* TODAY IS REFRESHED BEFORE THE PAGE IS BUILT, and only today.
+       The page reads `Collection` out of Postgres rather than asking Odoo, so
+       a day still in progress is stale the moment a payment lands — which is
+       exactly how Loran came to show nothing here while the Odoo-connected
+       copy showed 41,587. Closed days cannot change, so re-pulling them would
+       be waste; the open day is the only volatile one.
+
+       Failure is deliberately swallowed. A page that still renders yesterday's
+       closed figures is far better than one that 500s because Odoo blinked,
+       and the header already tells the reader when it last synced. */
+    const today = iso(new Date());
+    if (req.user && req.user.token) {
+      const { syncCollections, syncPackages } = require('../lib/finance-sync.js');
+      /* BOTH, or the figure is wrong. "Collected" is
+         (cash in − refunds − package sales + package used) ÷ 1.14, so pulling
+         the payments without the packages produces a number that looks fine
+         and is not. They run together and fail independently. */
+      await Promise.all([
+        syncCollections({ token: req.user.token, from: today, to: today })
+          .catch((e) => req.log.warn({ err: e }, 'bootstrap: today\'s collections did not refresh')),
+        syncPackages({ token: req.user.token, from: today, to: today })
+          .catch((e) => req.log.warn({ err: e }, 'bootstrap: today\'s packages did not refresh')),
+      ]);
+    }
+
+    return require('../lib/tgc-bootstrap.js').build();
+  });
+
+  /**
+   * Pull customer receipts into `Collection`.
+   *
+   * WITHOUT THIS THE WHOLE COMMISSION HALF IS ZERO. Branch pools are paid on
+   * cash collected ex-VAT, and the page reads that from `Collection`; an empty
+   * table is not "nobody earned anything", it is "nobody has loaded the cash
+   * yet", and the two look identical on screen.
+   *
+   * It runs on the signed-in user's own token, exactly as `/api/refresh` does —
+   * the unattended path needs MCP_USER/MCP_PASSWORD in the environment, which a
+   * person clicking Sync does not have and should not need.
+   */
+  app.post('/api/tgc/sync-collections', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 6, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    if (req.headers['x-requested-with'] !== 'fetch') {
+      return reply.code(403).send({ error: 'Missing X-Requested-With.' });
+    }
+    const today = iso(new Date());
+    const to = isDate(req.body && req.body.to) ? req.body.to : today;
+    const from = isDate(req.body && req.body.from) ? req.body.from : `${to.slice(0, 7)}-01`;
+    if (from > to) return reply.code(400).send({ error: 'The range starts after it ends.' });
+
+    try {
+      const { syncCollections, syncPackages } = require('../lib/finance-sync.js');
+      const { prisma } = require('../lib/db.js');
+      /* Packages alongside the payments — see the note in /api/tgc/bootstrap.
+         Pressing Sync and getting only half the formula refreshed would be
+         worse than not pressing it, because the page would then claim to be
+         up to date. */
+      const [out, pkg] = await Promise.all([
+        syncCollections({ token: req.user.token, from, to }),
+        syncPackages({ token: req.user.token, from, to })
+          .catch((e) => ({ error: e.message })),
+      ]);
+      out.packages = pkg;
+
+      /* POINT THE SECTION AT WHAT WAS JUST SYNCED.
+         `collectionByBranch` filters on the configured source, and the section
+         ships reading `snapshot`. Writing `odoo` rows without flipping it left
+         168 real collection rows in the table that every query excluded — the
+         cash was there, the commission read zero, and nothing said why.
+         `scripts/sync-collections.js` has always done this; the endpoint called
+         the library directly and skipped it. The snapshot rows are untouched,
+         so `snapshot` remains a one-field revert. */
+      const before = await prisma.financeSource.findUnique({ where: { section: 'collections' } });
+      await prisma.financeSource.upsert({
+        where: { section: 'collections' },
+        update: { mode: 'odoo', cutover: null },
+        create: { section: 'collections', mode: 'odoo' },
+      });
+
+      await app.audit(req, 'sync-collections', `${from}..${to} — source ${before ? before.mode : 'unset'} → odoo`);
+      return { ...out, source: 'odoo', wasSource: before ? before.mode : null };
+    } catch (e) {
+      req.log.error(e);
+      /* Which layer failed changes what the reader should do, so the kind is
+         stated and the detail stays in the log. */
+      const said = {
+        token: [401, 'Your sign-in has expired. Sign out, sign in again, then Sync.'],
+        odoo: [503, 'The MCP is up but Odoo is not answering it. The figures already shown are the last good pull.'],
+      }[e.kind] || [502, 'Could not reach the MCP for collections. The server log has the detail.'];
+      return reply.code(said[0]).send({ error: said[1] });
+    }
+  });
+
+  /**
+   * Odoo's `read_group` and `search_read`, answered from the invoice cache.
+   *
+   * THE PAGE STILL NEVER REACHES THE MCP. This is SQL; only the shape of the
+   * answer is Odoo's, because the script that asks destructures `branch_id` as
+   * a `[id, name]` pair and reads sums under their field names. Keeping the
+   * call sites intact is what lets every panel stay byte-identical to the
+   * dashboard it came from.
+   *
+   * A read, but POST: the query is a domain, and a domain does not belong in a
+   * URL — it is long, it is nested, and it would end up in access logs. The
+   * `X-Requested-With` header is required for the same reason the other writes
+   * require it.
+   */
+  app.post('/api/tgc/odoo', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    if (req.headers['x-requested-with'] !== 'fetch') {
+      return reply.code(403).send({ error: 'Missing X-Requested-With.' });
+    }
+    const b = req.body || {};
+    if (!b.model || !b.method) return reply.code(400).send({ error: 'Which model and method?' });
+    try {
+      const rows = await require('../lib/tgc-odoo.js').call(b);
+      return { payload: rows };
+    } catch (e) {
+      req.log.error(e);
+      return reply.code(500).send({ error: 'Could not read the cache for that query.' });
+    }
+  });
+
+  /**
+   * Everything the merged report needs that a date change does not move: the
+   * plan, the policy, the roster, the seasonal shape, the frozen history.
+   *
+   * ETagged for the same reason `/api/targets-plan` is — every figure in it is
+   * a decision somebody made, so it changes when somebody saves and at no other
+   * time. Unlike that one the tag is cheap to compute here, because the answer
+   * is assembled from tables whose row counts and timestamps are the tag.
+   */
+  app.get('/api/tgc/reference', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const Tgc = require('../lib/tgc.js');
+    reply.header('Cache-Control', 'private, no-cache');
+    return Tgc.reference();
+  });
+
+  /**
+   * What actually happened in a window — billed by branch, doctor, product and
+   * service group, and cash collected by branch.
+   *
+   * Served from the live cache where the sync has reached and from the imported
+   * history where it has not, with `sources` saying which. A reader asking for
+   * March 2026 gets March 2026, not the silence of an empty cache.
+   */
+  app.get('/api/tgc/period', {
+    preHandler: app.requireUser,
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const Tgc = require('../lib/tgc.js');
+    const today = iso(new Date());
+    const to = isDate(req.query.to) ? req.query.to : today;
+    const from = isDate(req.query.from) ? req.query.from : `${to.slice(0, 7)}-01`;
+    if (from > to) return reply.code(400).send({ error: 'The range starts after it ends.' });
+    return Tgc.period(from, to);
+  });
 
   /* ------------------------------------------------------------- plan --- */
 

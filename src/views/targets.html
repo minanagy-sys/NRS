@@ -3,66 +3,217 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#58382C">
-<title>Targets &amp; Plan · Nouvelage</title>
+<title>Targets &amp; Commission · Nouvelage</title>
 <link rel="stylesheet" href="/assets/fonts/fonts.css">
-<link rel="stylesheet" href="/assets/app.css">
+<!-- NOT app.css. See the note at the foot of tgc.css: this page reproduces the
+     standalone dashboard's look, and a second stylesheet defining .tab, .panel
+     and table.tg-t would settle the question by load order. -->
+<link rel="stylesheet" href="/assets/tgc.css">
 </head>
 <body>
-
-<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
-  <!-- Moved into the shared bar by cbar.js. Lives here because it
-       belongs to this report and would be noise on the other ten. -->
-  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
-      <button data-scope="all" class="on">All</button>
-      <button data-scope="Nouvel Age">Nouvel Age</button>
-      <button data-scope="ZAT">ZAT</button>
-    </div></div>
-</div>
-
-<div class="header">
-  <div class="brand">NOUVELAGE · TARGETS · ODOO 18</div>
-  <h1>Targets &amp; Plan<em id="hPeriod"></em></h1>
-  <div class="header-sub" id="hSub">Cash collected and revenue billed, against the plan. Two bases, and they are not expected to agree.</div>
-  <div class="hero-stats"><div class="hero-stat"><div class="lbl">Collected</div><div class="val" id="hTarget">—</div><div class="unit" id="hTargetU">EGP ex-VAT · the commission base</div></div>
-    <div class="hero-stat"><div class="lbl">Billed</div><div class="val" id="hAch">—</div><div class="unit">EGP ex-VAT · ex-package</div></div>
-    <div class="hero-stat"><div class="lbl">Against plan</div><div class="val" id="hPace">—</div><div class="unit" id="hPaceU">collected vs planned</div></div>
-    <div class="hero-stat"><div class="lbl">Branches at the floor</div><div class="val" id="hDocs">—</div><div class="unit" id="hDocsU">of those with a plan</div></div></div>
-</div>
-
-<div class="rangeline" id="rangeline">Loading…</div>
-
-<div class="tabs-wrap"><div class="tabs">
-  <button class="tab active" data-panel="wh"><span class="tab-num">01</span> Live</button>
-  <button class="tab" data-panel="ov"><span class="tab-num">02</span> Plan</button>
-  <button class="tab" data-panel="ac"><span class="tab-num">03</span> Actuals</button>
-  <button class="tab" data-panel="tb"><span class="tab-num">04</span> Branch targets</button>
-  <button class="tab" data-panel="ts"><span class="tab-num">05</span> Service targets</button>
-  <button class="tab" data-panel="doc"><span class="tab-num">06</span> Doctors</button>
+</head>
+<body>
+<header class="header">
+ <div class="brand">Nouvelage · Revenue & Targets · Odoo 18</div>
+ <h1>Targets Q4 2026 – 2027<em>and what got us here, 2024 – 2026</em></h1>
+ <p class="header-sub">Live from Odoo 18: 2026 numbers, schedules and product categories refresh on their own. 2024–2025 come from the journal exports.</p>
+ <div class="hero-stats" id="heroStats"></div>
+ <div class="gpanel"><div class="gbar" id="gbar"></div>
+ <div class="grow2"><div class="prow" id="prow"></div><div class="gact" id="gact"></div></div></div>
+ <div class="ghold" id="ghold"></div>
+</header>
+<div class="tabs-wrap"><div class="pswitch" id="pswitch"><button class="on" data-p="t">Targets & live</button><button data-p="c">Commission</button></div><div class="tabs" id="tabs">
+ <button class="tab active" data-panel="wh"><span class="tab-num">00</span>What's happening</button>
+ <button class="tab" data-panel="ov"><span class="tab-num">01</span>Overview</button>
+ <button class="tab" data-panel="ac"><span class="tab-num">02</span>Actuals</button>
+ <button class="tab" data-panel="tb"><span class="tab-num">03</span>Branch targets</button>
+ <button class="tab" data-panel="ts"><span class="tab-num">04</span>Service targets</button>
+ <button class="tab" data-panel="dp"><span class="tab-num">05</span>Day plan</button>
+ <button class="tab" data-panel="dr"><span class="tab-num">05</span>Doctors</button>
+ <button class="tab" data-panel="cm"><span class="tab-num">06</span>Commission</button>
+ <button class="tab" data-panel="tf"><span class="tab-num">07</span>Target file</button>
+ <button class="tab" data-panel="cp"><span class="tab-num">08</span>Commission policy</button>
 </div></div>
 
-<div class="panel active" id="wh"></div>
-<div class="panel" id="ov"></div>
-<div class="panel" id="ac"></div>
-<div class="panel" id="tb"></div>
-<div class="panel" id="ts"></div>
-<div class="panel" id="doc"></div>
+<div class="panel active" id="wh"><section>
+ <div class="kicker">00 — What's happening</div>
+ <div class="tg-chips" id="whPreset"></div>
+ <div class="tg-chips"><input type="date" id="whFrom" aria-label="From"><input type="date" id="whTo" aria-label="To"><button class="btn" id="whShow">Show</button><span class="doc-meta" id="whSync" style="margin-left:auto"></span></div>
+ <div class="tg-chips" id="whBrand"></div>
+ <div class="day-hero" id="whHero"></div>
+ <p class="sub" id="whSub"></p>
+ <div class="tg-note" id="whMsg" hidden></div>
+ <div class="kpi-grid" id="whKpi"></div>
+ <div class="fc-box" id="whFc" hidden></div>
+ <div class="tg-note"><strong>Two numbers, two jobs.</strong> <b>Collected</b> is the cash that came in (payments − refunds, package cash counted only when used, ÷ 1.14). It is what the target and the commission use. <b>Billed</b> is invoiced ex-VAT; only invoices say which doctor and which service, so doctors and services use it.</div>
+ <h3 class="subtitle" id="whViewH"><span>View by</span><span id="whViewSlot"></span><span id="whSortSlot"></span><span class="vat-tag" id="whViewTag">tap a branch for doctors and services</span></h3>
+ <div id="whBr"></div>
+ <div id="whDocSec"><h3 class="subtitle">Doctors <span class="vat-tag">billed ex-VAT</span></h3>
+ <div class="tg-tw"><table class="tg-t" id="whDoc"></table></div></div>
+ <h3 class="subtitle">Services <span class="vat-tag">billed ex-VAT</span></h3>
+ <div class="tg-tw"><table class="tg-t" id="whSvc"></table></div>
+ <div class="tools" style="margin-top:10px"><button class="btn ghost" id="whSvcLoad" hidden>See more</button></div>
+</section></div>
 
-<!-- The shared $/fmt/pc/esc, loaded before anything that uses them. -->
+<div class="panel" id="ov"><section>
+ <div class="kicker">06 — Overview</div><h2 class="title">Monthly revenue against the 2027 plan</h2>
+ <p class="sub">Each year month by month. The dashed espresso line is 80% of target, where commission starts.</p>
+ <div class="chart-card"><div class="chartwrap"><canvas id="trend"></canvas></div></div>
+ <h3 class="subtitle">Commission ladder 2027 <span class="vat-tag">Ex-VAT</span></h3>
+ <div class="ladder" id="ladder"></div>
+ <h3 class="subtitle">Year by year</h3>
+ <div class="kpi-grid" id="yrKpi"></div>
+</section></div>
+
+<div class="panel" id="ac"><section>
+ <div class="kicker">01 — Actuals</div><h2 class="title">What actually happened</h2>
+ <p class="sub"></p>
+ <div class="tg-chips" id="acYear"></div>
+ <div class="tg-chips" id="acMode"></div>
+ <div class="tg-chips"><select id="acPer" aria-label="Period"></select></div>
+ <div class="kpi-grid" id="acKpi"></div>
+ <h3 class="subtitle">By branch <span class="vat-tag" id="acBrTag"></span></h3>
+ <div class="tg-tw"><table class="tg-t" id="acBr"></table></div>
+ <h3 class="subtitle">By service <span class="vat-tag">billed ex-VAT · product types under each service</span></h3>
+ <div class="tg-tw"><table class="tg-t" id="acSv"></table></div>
+ <div class="tools" style="margin-top:10px"><button class="btn ghost" id="acPtMore">See product types</button></div>
+ <table id="acPt" hidden></table>
+</section></div>
+
+<div class="panel" id="tb"><section>
+ <div class="kicker">02 — Branch targets</div><h2 class="title" id="tbTitle">Targets by branch</h2>
+ <p class="sub">Targets for the dates in the filter above. Summary gives each branch's total; Month by month shows every month, or one branch month by month. Each column is the revenue needed for that commission tier.</p>
+ <div class="tg-chips" id="tbYear"></div><div class="tg-chips" id="tbMode"></div>
+ <div class="tg-chips"><select id="tbPer" aria-label="Period"></select><input type="date" id="tbDay" min="2026-10-01" max="2027-12-31" value="2027-01-09" hidden aria-label="Day"></div>
+ <div class="tg-chips" id="tbTier" hidden></div><div class="tg-chips"><select id="tbOne" aria-label="Branch detail" hidden></select></div>
+ <div class="tg-chips" id="tbBrand"></div>
+ <div class="tg-tw"><table class="tg-t" id="tbT"></table></div>
+ <h3 class="subtitle">Monthly plan, all branches</h3>
+ <div class="chart-card"><div class="chartwrap"><canvas id="tbChart"></canvas></div></div>
+</section></div>
+
+<div class="panel" id="ts"><section>
+ <div class="kicker">03 — Service targets</div><h2 class="title">Targets by service</h2>
+ <p class="sub">What each service has to bring in, for the branch and period you pick. Split by each branch's own 2026 service mix and each service's seasonality.</p>
+ <div class="ts-filter">
+  <div class="ts-f"><span class="ts-l">Branch</span><select id="tsBr" aria-label="Branch"></select></div>
+  <div class="ts-f"><span class="ts-l">Year</span><div class="tg-chips" id="tsYear"></div></div>
+  <div class="ts-f"><span class="ts-l">View</span><div class="tg-chips" id="tsMode"></div></div>
+  <div class="ts-f"><span class="ts-l">Period</span><select id="tsPer" aria-label="Period"></select></div>
+ </div>
+ <div class="kpi-grid" id="tsKpi"></div>
+ <h3 class="subtitle">Main services <span class="vat-tag" id="tsLab"></span></h3>
+ <div class="ts-cards" id="tsCards"></div>
+ <h3 class="subtitle">Commission tiers by service</h3>
+ <p class="sub">Each row is the revenue needed for that tier. Product types sit under their service.</p>
+ <div class="tg-tw"><table class="tg-t" id="tsG"></table></div>
+</section></div>
+
+<div class="panel" id="dp"><section>
+ <div class="kicker">05 — Day plan</div>
+ <div class="tg-chips"><input type="date" id="dpDay" min="2026-01-01" max="2027-12-31" value="2027-01-09" aria-label="Day"><select id="dpBr" aria-label="Branch"></select></div>
+ <div class="day-hero" id="dpHero"></div>
+ <p class="sub" id="dpSub"></p>
+ <div class="kpi-grid" id="dpKpi"></div>
+ <div id="dpBody"></div>
+</section></div>
+
+<div class="panel" id="dr"><section>
+ <div class="kicker">04 — Doctors</div><h2 class="title">Doctor targets</h2>
+ <p class="sub">Same groups as the approved target schedule. Numbers come from the uploaded doctor file. Daily targets follow her shifts in the Odoo weekly schedule.</p>
+ <div class="tg-chips" id="drYear"></div><div class="tg-chips" id="drMode"></div>
+ <div class="tg-chips" id="drTier" hidden></div><div class="tg-chips"><select id="drPer" aria-label="Period"></select><select id="drBr" aria-label="Branch"></select><select id="drOne" aria-label="Doctor detail" hidden></select></div>
+ <div class="tg-tw"><table class="tg-t" id="drT"></table></div>
+</section></div>
+
+<div class="panel" id="tf"><section>
+ <div class="kicker">05 — Target file</div><h2 class="title">Export, edit, upload</h2>
+ <p class="sub">One Excel workbook with two sheets you can edit: Branches and Doctors, October 2026 to December 2027. Change any number, add or delete a branch or doctor row, then upload the workbook. A blank cell keeps the number already in the dashboard. A branch or doctor row you delete is removed.</p>
+ <div class="tools"><button class="btn" id="expX">Export target workbook</button><label class="btn ghost" for="upX">Upload target workbook</label><input type="file" id="upX" accept=".xlsx,.xls,.csv,.numbers" hidden><button class="btn ghost" id="rsX" hidden>Reset to approved file</button></div>
+ <div class="status" id="stX"></div>
+ <div class="tg-note" style="margin-top:14px"><strong>Accepted files.</strong> .xlsx with a sheet whose first column is Branch and/or a sheet whose first column is Doctor, or a single .csv of either. Month columns must be named like 2026-10. From Numbers, use File → Export To → Excel. The Services sheet in the export is for reference; it is rebuilt from the branch numbers and is ignored on upload.</div>
+ <div class="kpi-grid" id="tfKpi" style="margin-top:14px"></div>
+ <h3 class="subtitle">How the numbers were built</h3>
+ <ul class="note">
+  <li><strong>Revenue.</strong> Posted customer invoices ex-VAT. 2024 to March 2026 from the journal exports, April to September 2026 from Odoo 18. Package Sale journal excluded.</li>
+  <li><strong>Months.</strong> The average monthly shape of 2024 and 2025. Ramadan falls around February–March 2027, so February may need a manual edit.</li>
+  <li><strong>2027 branches.</strong> Each branch has a minimum 100% target per month: Chizar 4.0M, The Strip 4.2M, City Stars 4.03M, CFC 4.0M, Mall of Arabia 2.0M, Roshdy 1.5M, Zayed and Mohandseen 1.0M, El Rehab, Madinty and Loran 0.5M. The floor is the lowest the 100% target can be in any month: each month keeps the approved trend number, raised to the floor where the trend was lower. Golden Square keeps its ramp from April 2027. August 2026 (21.3M ex-VAT) is the reference: the weakest 2027 month is above it.</li><li><strong>October–December 2026.</strong> The earlier bridge, with every branch raised to at least its floor. That gives 68.4M; the trend forecast of about 54M lands near 79%, just under the commission floor.</li>
+  <li><strong>ZAT.</strong> Madinty, El Rehab and Golden Square are tagged ZAT and are inside the 300M, as in your file. Use the brand filter to see them apart.</li>
+  <li><strong>Days.</strong> Branch days use the 2026 weekday pattern (Friday is about 60% of an average day). Doctor days follow her Odoo shifts, and doctors with no shift are spread evenly across the month.</li>
+  <li><strong>Doctors.</strong> Your approved doctor file (62 people), moved with the branches each doctor works in: her target is split across her branches by shift hours in Odoo, each part grows with that branch, and the total equals the branches that have doctors on the schedule. People not in the file show actual revenue but no target.</li>
+ </ul>
+</section></div>
+<div class="panel" id="cm"><section>
+ <div class="kicker">06 — Commission</div><h2 class="title" id="cmTitle">What everyone earns</h2>
+ <p class="sub" id="cmSub"></p>
+ <div class="tg-note" id="cmMsg" hidden></div>
+ <div class="kpi-grid" id="cmKpi"></div>
+ <h3 class="subtitle">Branch teams <span class="vat-tag">collected ex-VAT</span></h3>
+ <p class="cp-desc">Collected against the month target gives the level; collected gives the revenue tier; the pool is shared by weight from the Commission policy.</p>
+ <div class="tg-tw"><table class="tg-t" id="cmBr"></table></div>
+ <h3 class="subtitle">Doctors <span class="vat-tag">billed ex-VAT</span></h3>
+ <p class="cp-desc">Month revenue × the scheme rate, plus hours × hourly rate, fixed pay and management fee. Hours are estimated from the weekly schedule until the fingerprint is linked to employees.</p>
+ <div class="tg-tw"><table class="tg-t" id="cmDr"></table></div>
+ <h3 class="subtitle" id="cmMgH">Management</h3>
+ <div class="tg-tw" id="cmMgW"><table class="tg-t" id="cmMg"></table></div>
+</section></div>
+
+<div class="panel" id="tp"><section>
+ <div class="kicker">Target plan</div><h2 class="title">Target plan, now to December 2027</h2>
+ <p class="sub" id="tpSub">Every month from this month to the end of 2027. Pick what to see in the filter bar. Branch and doctor numbers are editable: change a cell, then press Save plan.</p>
+ <div class="tools"><button class="btn" id="tpSave" hidden>Save plan</button><button class="btn ghost" id="tpUndo" hidden>Discard changes</button><span class="status" id="tpSt" style="align-self:center"></span></div>
+ <div class="tg-tw"><table class="tg-t tp-t" id="tpT"></table></div>
+</section></div>
+<div class="panel" id="cmd"><section>
+ <div class="kicker">Commission — Doctors</div><h2 class="title">Doctor commission and payslips</h2>
+ <p class="sub" id="cmdSub"></p>
+ <div class="kpi-grid" id="cmdKpi"></div>
+ <div class="tg-chips"><input class="search" id="cmdQ" placeholder="Search doctor or scheme…" style="flex:1;min-width:220px;background:var(--card);color:var(--ink);border:1px solid var(--line-strong);border-radius:6px;padding:9px 12px;font-size:14px"></div>
+ <div class="tg-tw"><table class="tg-t" id="cmdT"></table></div>
+</section></div>
+<div class="panel" id="cms"><section>
+ <div class="kicker">Commission — Staff</div><h2 class="title">Branch staff, person by person</h2>
+ <p class="sub">Each person's share of their branch pool, from the team and weights in the policy. Add the real names, payment method and account in Commission policy → Branch team → Staff list.</p>
+ <div class="kpi-grid" id="cmsKpi"></div>
+ <div id="cmsBody"></div>
+</section></div>
+<div class="panel" id="cmc"><section>
+ <div class="kicker">Commission — Call center</div><h2 class="title">Call center commission</h2>
+ <div id="cmcBody"></div>
+</section></div>
+<div class="ps-back" id="psBack" hidden><div class="ps-box" role="dialog" aria-modal="true" aria-labelledby="psTitle"><div id="psBody"></div><div class="tools" style="margin-top:16px"><button class="btn" id="psPrint">Print / save as PDF</button><button class="btn ghost" id="psDl">Download payslip</button><button class="btn ghost" id="psClose">Close</button></div></div></div>
+
+<div class="panel" id="cp"><section>
+ <div class="kicker">08 — Commission policy</div><h2 class="title">Commission policy, all teams</h2>
+ <p class="sub">Every number and name here can be changed. Edit a cell, add or delete rows, then press Save: the saved policy is what everyone who opens this dashboard sees. Export gives the same policy as an Excel workbook with one sheet per table; edit it and upload it back.</p>
+ <div class="tools"><button class="btn" id="cpSave">Save policy</button><button class="btn ghost" id="cpExp">Export policy workbook</button><label class="btn ghost" for="cpUp">Upload policy workbook</label><input type="file" id="cpUp" accept=".xlsx" hidden><button class="btn ghost" id="cpReset">Reset to starting draft</button></div>
+ <div class="status" id="cpSt"></div>
+ <div class="tg-chips" id="cpNav"></div>
+ <div id="cpBody"></div>
+</section></div>
+<footer><div class="brand">Nouvelage Aesthetic Clinics</div><p>Built from Odoo 18 and journal exports · 28 September 2026</p></footer>
+
+<!-- THE DASHBOARD'S OWN SCRIPT, UNCHANGED.
+
+     `tgc-dash.js` is lines 454–1366 of `Targets Q4 2026 – 2027 · Nouvelage.html`
+     copied without a character altered. Every earlier version of this page
+     RE-IMPLEMENTED each panel, and each one came out a little different; a
+     hundred small differences is a different page.
+
+     `tgc-shim.js` supplies the four things that script reaches for — the two
+     data constants, and `claude.use('mcp'|'db'|'downloads')` — then appends the
+     script itself. It has to run first, and the script cannot be listed here,
+     because `D` and `TGT` must exist before it is evaluated.
+
+     `chartlet.js` and `fmt.js` are the app's own; the shim maps Chart.js onto
+     the first of them. -->
 <script src="/assets/fmt.js"></script>
-<script src="/assets/shell.js"></script>
-<script src="/assets/nav.js"></script>
-<script src="/assets/cbar.js"></script>
-<script src="/assets/rules.js"></script>
+<!-- chartlet.js destructures `esc` off TgFmt at load, so a missing tg-fmt.js
+     makes it throw before it can publish itself — and the shim then finds no
+     `window.Chartlet` and silently leaves every chart blank. -->
 <script src="/assets/tg-fmt.js"></script>
-<script src="/assets/target-view.js"></script>
+<script src="/assets/nav.js"></script>
 <script src="/assets/chartlet.js"></script>
-<script src="/assets/tg-wh.js"></script>
-<script src="/assets/tg-ac.js"></script>
-<script src="/assets/tg-ov.js"></script>
-<script src="/assets/tg-tb.js"></script>
-<script src="/assets/tg-ts.js"></script>
-<script src="/assets/tg-dr.js"></script>
-<script src="/assets/targets.js"></script>
+<script src="/assets/tgc-shim.js"></script>
 </body>
 </html>

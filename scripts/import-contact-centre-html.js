@@ -286,6 +286,14 @@ const D = (s) => new Date(`${s}T00:00:00Z`);
     credited: r[4] === 1, agentIdx: r[5], team: r[6], personIdx: r[7],
   }));
 
+  /* `CRM.EI` is keyed by name, so employees sharing a name have already
+     collapsed into one entry by the time the snapshot was written. `CRM.DUPN`
+     is the record of that — [name, how many] — computed upstream from the raw
+     Odoo rows, and the only surviving trace of the duplication. Carried onto
+     the row it describes rather than dropped, because the report's health
+     panel reads it and a duplicate name is how commission lands on the wrong
+     person. */
+  const dupCount = Object.fromEntries(CRM.DUPN || []);
   const emps = Object.entries(CRM.EI || {}).map(([name, v]) => ({
     name,
     department: String(v[0] || ''),
@@ -293,6 +301,7 @@ const D = (s) => new Date(`${s}T00:00:00Z`);
     homeLogin: String(v[2] || ''),
     allowedIds: Array.isArray(v[3]) ? v[3].filter(Number.isInteger) : [],
     active: v[4] !== false && v[4] !== 0,
+    recordCount: dupCount[name] || 1,
   }));
 
   const exts = EXT.map((r) => ({

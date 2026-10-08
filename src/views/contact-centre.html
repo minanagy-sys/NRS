@@ -3,74 +3,247 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#58382C">
-<title>Contact Centre · Nouvelage</title>
+<title>Contact Centre &middot; Nouvelage</title>
 <link rel="stylesheet" href="/assets/fonts/fonts.css">
-<link rel="stylesheet" href="/assets/app.css">
+<!-- NOT app.css. See the note at the top of cc.css: this page reproduces the
+     standalone dashboard's look, and a second stylesheet defining .btn, .seg
+     and .topbar would settle the question by load order. -->
+<link rel="stylesheet" href="/assets/cc.css">
 </head>
 <body>
-
-<div class="cbar" data-presets="mtd,lastmonth,quarter,ytd" data-preset="mtd">
-  <!-- Moved into the shared bar by cbar.js. Lives here because it
-       belongs to this report and would be noise on the other ten. -->
-  <div class="cbar-extra"><div class="seg" id="scope" title="Which entity to include">
-      <button data-scope="all" class="on">All</button>
-      <button data-scope="Nouvel Age">Nouvel Age</button>
-      <button data-scope="ZAT">ZAT</button>
-    </div></div>
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gTitle">
+ <div class="g-card">
+  <div class="eyebrow" style="color:var(--caramel)">Nouvelage · Contact Centre · UCM</div>
+  <h2 id="gTitle">Checking this week's UCM…</h2>
+  <p class="g-sub" id="gSub"></p>
+  <div id="gBody"></div>
+ </div>
 </div>
-
-<div class="header">
-  <div class="brand">NOUVELAGE · CONTACT CENTRE · PBX &amp; ODOO 18</div>
-  <h1>Contact Centre<em id="hPeriod"></em></h1>
-  <div class="header-sub" id="hSub">Three frozen windows, and every panel says which one it is answering for. Nine Odoo logins cover sixty-seven people — the names here come from the stamp on the record, not from the login.</div>
-  <div class="hero-stats">
-    <div class="hero-stat"><div class="lbl">Opportunities</div><div class="val" id="hOpp">—</div><div class="unit">worked by the contact centre</div></div>
-    <div class="hero-stat"><div class="lbl">Booking rate</div><div class="val" id="hBook">—</div><div class="unit">of opportunities</div></div>
-    <div class="hero-stat"><div class="lbl">Show rate</div><div class="val" id="hShow">—</div><div class="unit">policy floor is 75%</div></div>
-    <div class="hero-stat"><div class="lbl">Credit lost</div><div class="val" id="hCredit">—</div><div class="unit">showed, but not on the agent's booking</div></div>
+<div class="app" id="app">
+<main>
+ <header class="topbar" id="topbar">
+  <div class="row">
+   <div class="seg" id="preset" role="group" aria-label="Date range">
+    <button data-p="today">Today</button><button data-p="yesterday">Yesterday</button><button data-p="7d">Last 7D</button><button data-p="mtd">Month to date</button><button data-p="lm">Last month</button><button data-p="qtd">This quarter</button><button data-p="ytd">Year to date</button>
+   </div>
+   <label class="field"><span class="lbl">From</span><input class="dark-in" type="date" id="dFrom"></label>
+   <label class="field"><span class="lbl">To</span><input class="dark-in" type="date" id="dTo"></label>
+   <button class="btn solid" id="bShow">Show</button>
+   <div class="seg" id="entity" role="group" aria-label="Brand">
+    <button data-e="all" aria-pressed="true">All</button><button data-e="na">Nouvel Age</button><button data-e="zat">ZAT</button>
+   </div>
+   <span class="spacer"></span>
+   <button class="btn ghost" id="bExport">Export</button>
+   <button class="btn ghost" id="bImport">Import UCM</button>
   </div>
+  <div class="row">
+   <label class="field"><span class="lbl">Branch</span><select class="dark-in" id="fBranch"></select></label>
+   <label class="field"><span class="lbl">Doctor</span><select class="dark-in" id="fDoctor"></select></label>
+   <label class="field"><span class="lbl">Person</span><select class="dark-in" id="fAgent"></select></label>
+   <label class="field"><span class="lbl">Department</span><select class="dark-in" id="fDept"></select></label>
+   <div class="seg" id="team" role="group" aria-label="Team">
+    <button data-t="1" aria-pressed="true">Call centre</button><button data-t="0">Branch follow-up</button><button data-t="all">All</button>
+   </div>
+   <span class="spacer"></span>
+   <span class="status"><i id="stDot"></i><span id="stCount"></span><span class="sep"></span><small id="stLive">Snapshot 1 Oct</small></span>
+   <button class="btn ghost" id="bSync">Sync now</button>
+   <span class="spacer"></span>
+  </div>
+ </header>
+
+ <section class="hero">
+  <div class="eyebrow">Nouvelage · Contact Centre · Odoo 18</div>
+  <h1>Contact Centre</h1>
+  <div class="range" id="hRange"></div>
+  <p id="hLede"></p>
+  <div class="hstats" id="hStats"></div>
+ </section>
+ <div class="strip" id="strip"></div>
+ <nav class="tabs" id="tabs" role="tablist"></nav>
+
+ <div class="content">
+  <section class="panel on" id="pa" role="tabpanel">
+   <div class="sec-k">00 — Appointments</div>
+   <h2 class="sec-h" id="hat"></h2>
+   <p class="sec-p" id="hap"></p>
+   <div id="apEmpty"></div>
+   <div id="apBody">
+    <div class="cards" id="apCards"></div>
+    <div class="srcbox" id="apSrc"></div>
+    <div class="ap-head"><h3>By branch <small>tap a branch for its hours, doctors and services</small></h3><div class="seg light" id="apSort" role="group" aria-label="Sort branches"><button data-s="n" aria-pressed="true">Booked</button><button data-s="sh">Showed</button><button data-s="cf">Confirmed</button><button data-s="name">Name</button></div></div>
+    <div id="apBrands" class="brands"></div>
+    <div id="apBranches"></div>
+    <h3>Hour by hour <small>appointments in each half-hour slot</small></h3>
+    <div class="tw"><table class="heat apheat" id="apHeat"></table></div>
+    <h3>By service</h3>
+    <div class="svc-grid" id="apSvc"></div>
+    <h3>By doctor</h3>
+    <div class="tw capped"><table id="apDoc"></table></div>
+    <div id="apDayWrap"><h3>The day, doctor by doctor <small id="apDayLbl"></small></h3>
+     <div class="legend" id="apLegend"></div>
+     <div class="tw"><div class="tl" id="apDay"></div></div></div>
+    <h3>Confirmation calls <small>a Call or To-Do marked done on the appointment, on or before its day</small></h3>
+    <div class="cards" id="apConfCards"></div>
+    <div class="tw" style="margin-top:14px"><table id="apConf"></table></div>
+    <div class="notice ar ok" id="apNote" style="margin-top:18px"></div>
+   </div>
+  </section>
+  <section class="panel" id="p1" role="tabpanel">
+   <div class="sec-k">01 — Executive summary</div>
+   <h2 class="sec-h" id="h1t"></h2>
+   <p class="sec-p">Opportunities the agents opened in Odoo, what became a booking, and which patients actually reached the clinic.</p>
+   <div id="emptyNote"></div>
+   <div class="cards" id="kCards"></div>
+   <h3>Contact centre vs branches <small>same dates, side by side</small></h3>
+   <div class="srcbox" id="exSrc"></div>
+   <div class="obar" id="oBar"></div><div class="okey" id="oKey"></div>
+   <h3>Opportunities by hour <small>every day of the range, added</small></h3>
+   <div id="hist"></div>
+   <h3>Daily volume</h3>
+   <div class="tw capped"><table id="tDaily"></table></div>
+  </section>
+
+  <section class="panel" id="pc" role="tabpanel">
+   <div class="sec-k">02 — CRM</div>
+   <h2 class="sec-h" id="hct"></h2>
+   <p class="sec-p">Everything Odoo CRM recorded in the range: every opportunity opened by any login, every activity logged on them, and where the booking chain breaks.</p>
+   <div class="notice ar ok"><b>المكالمات نفسها مش هنا.</b> كام مكالمة جت، واتردّ على كام، وفي قد إيه، دي أرقام السنترال (UCM)، وموجودة في تابات Queues وAgents وOutbound في Contact Centre على NRS. التاب ده بيوري أودو سجّل إيه، وبعد كده نربط الاتنين برقم التليفون.</div>
+   <div class="cards" id="cCards"></div>
+   <div class="srcbox" id="crSrc"></div>
+   <h3>Lead source <small>where each opportunity came from, and who entered it</small></h3>
+   <div class="cards" id="lsCards"></div>
+   <div id="lsNote"></div>
+   <div class="grid-2" style="margin-top:14px">
+    <div class="tw"><table id="tLsSrc"></table></div>
+    <div class="tw capped"><table id="tLsWho"></table></div>
+   </div>
+   <h3 style="font-size:24px">Lead source by day</h3>
+   <div class="tw capped"><table id="tLsDay"></table></div>
+   <h3>Who opened opportunities <small>click a login to see the people behind it</small></h3>
+   <div class="notice ar ok"><b>مين فتح الفرصة بقى بالاسم.</b> اللي فتح = الموظفة اللي اسمها في أول رسالة «Record created» على الأوبورتيونيتي. واللي حجز = الموظفة اللي اسمها في رسالة «Appointment … has been created». حقل الموظف على الأوبورتيونيتي بيتغيّر مع كل تعديل، فمش بنعتمد عليه. اليوزر المشترك ظاهر جنبها كـ Login.</div>
+   <div class="tw"><table id="tCrmLogin"></table></div>
+   <p class="hcap">Minutes to booking = opportunity created → “Appointment … has been created” message. Cross-login = the person worked under a login that is not their home login in HR. Last touched by someone else = the employee field on the opportunity now shows a different person than the opener.</p>
+   <h3>Activities on opportunities</h3>
+   <div class="grid-2">
+    <div class="tw"><table id="tActLogin"></table></div>
+    <div class="tw"><table id="tActType"></table></div>
+   </div>
+   <p class="hcap">The branch filter follows the opportunity's branch. Most follow-ups sit on opportunities with no branch set or opened before the range, so a branch filter shows only a few of them.</p>
+   <h3>What the activities say <small>outcome written on open activities</small></h3>
+   <div id="outBars"></div>
+   <h3>Activities by day</h3>
+   <div id="actHist"></div>
+   <h3>Re-booked <small>where the conversion breaks</small></h3>
+   <div class="notice ar red" id="rbNote"></div>
+   <div class="cards" id="rbCards"></div>
+   <h3 style="font-size:24px;margin-top:26px">By branch</h3>
+   <div class="tw"><table id="tRbBranch"></table></div>
+   <h3 style="font-size:24px;margin-top:26px">By agent <small>credit lost on her bookings</small></h3>
+   <div class="tw"><table id="tRbAgent"></table></div>
+   <h3>Duplicate opportunities <small>opened at the branch for a contact-centre patient</small></h3>
+   <div class="tw"><table id="tDup"></table></div>
+   <h3>What to fix first</h3>
+   <div class="ar" id="crmFix"></div>
+  </section>
+  <section class="panel" id="pu" role="tabpanel">
+   <div class="sec-k">03 — Calls</div>
+   <h2 class="sec-h" id="hut"></h2>
+   <p class="sec-p">Every inbound call and every dial from the weekly UCM export, and what they turned into in Odoo.</p>
+   <div id="uEmpty"></div>
+   <div id="uBody">
+    <div class="cards" id="uCards"></div>
+    <div class="srcbox" id="caSrc"></div>
+    <h3>Inbound by hour <small>every day of the range, added</small></h3>
+    <div id="uHistIn"></div>
+    <h3>Dials by hour</h3>
+    <div id="uHistOut"></div>
+    <h3>By agent <small>extension on the phones, name in Odoo</small></h3>
+    <div class="tw"><table id="tUAgent"></table></div>
+    <p class="hcap" id="uAgentCap"></p>
+    <h3>From a call to a patient in the chair</h3>
+    <div class="cards" id="uMatch"></div>
+    <div class="notice ar ok" id="uMatchNote" style="margin-top:14px"></div>
+    <h3>Daily volume</h3>
+    <div class="tw capped"><table id="tUDaily"></table></div>
+    <div id="uQueueWrap"><h3>By queue</h3><div class="tw"><table id="tUQueue"></table></div></div>
+   </div>
+   <h3>Weekly uploads</h3>
+   <div class="tw"><table id="tUWeeks"></table></div>
+   <div id="uExtWrap"><h3>Extensions <small>who sits on which extension</small></h3>
+    <div class="notice ar ok">الربط ده جاي من تاب Agents في NRS. لو بنت غيّرت الإكستنشن بتاعها، عدّلها هنا وداس Save، والأرقام هتتحسب على اسمها في أودو.</div>
+    <div class="tw"><table id="tUExt"></table></div>
+    <div style="margin-top:12px"><button class="btn solid" id="bExtSave" style="background:var(--espresso);color:#fff;border-color:var(--espresso)">Save extensions</button> <span class="hcap" id="extMsg"></span></div>
+   </div>
+  </section>
+  <section class="panel" id="p2" role="tabpanel">
+   <div class="sec-k">04 — Agents</div>
+   <h2 class="sec-h" id="h2t"></h2>
+   <p class="sec-p">Show rate = showed ÷ (booked − upcoming). The red mark is the 75% policy floor. Click a column to sort.</p>
+   <div class="tw"><table id="tAgents"></table></div>
+   <h3>Branch staff <small>receptionists and managers who open opportunities and book</small></h3>
+   <div class="tw capped"><table id="tBranchStaff"></table></div>
+   <h3>Show rate by agent</h3>
+   <div id="agBars"></div>
+   <div class="notice ar ok" style="margin-top:22px" id="agNote"></div>
+  </section>
+
+  <section class="panel" id="p3" role="tabpanel">
+   <div class="sec-k">05 — Timing</div>
+   <h2 class="sec-h" id="h3t"></h2>
+   <p class="sec-p">Opportunity creation time, Africa/Cairo. Darker cells carry more opportunities.</p>
+   <div class="tw"><table class="heat" id="tHeat"></table></div>
+   <h3>Contact centre vs branches, by hour <small>opportunities opened</small></h3>
+   <div class="tw"><table id="tSrcHour"></table></div>
+   <h3>By weekday</h3>
+   <div class="tw"><table id="tWd"></table></div>
+  </section>
+
+  <section class="panel" id="p4" role="tabpanel">
+   <div class="sec-k">06 — Branches &amp; doctors</div>
+   <h2 class="sec-h" id="h4t"></h2>
+   <p class="sec-p">Where bookings were sent and which doctor they were booked with (first linked appointment).</p>
+   <h3 style="margin-top:20px">By branch</h3>
+   <div class="tw"><table id="tBranch"></table></div>
+   <h3>By doctor <small>top 15</small></h3>
+   <div class="tw"><table id="tDoctor"></table></div>
+  </section>
+
+  <section class="panel" id="p5" role="tabpanel">
+   <div class="sec-k">07 — Data quality</div>
+   <h2 class="sec-h">Fix the entry, then trust the number</h2>
+   <p class="sec-p">What has to change in how the team records calls in Odoo — agenda for the data-entry session.</p>
+   <div class="ar">
+    <div class="notice ar red"><b>١. نوع المكالمة لازم يتسجل.</b> Type of Call يبقى إجباري قبل حفظ الفرصة. ولو البنات بيسجلوا على الأكتيفيتي، نضيف نوعين اسمهم Call In و Call Out لأنهم مش موجودين.</div>
+    <div class="notice ar red"><b>٢. أكتيفيتي بالنتيجة بعد كل مكالمة.</b> من غيرها مش هنقدر نقيس المتابعة ولا نطابق بـ UCM.</div>
+    <div class="notice ar red"><b>٣. الفرع يعمل Check-in على حجز الكول سنتر.</b> <span id="dq3"></span></div>
+    <div class="notice ar"><b>٤. الـ PIN شخصي.</b> كل اللي في الصفحة دي بقى محسوب على الموظفة اللي دخلت بالـ PIN بتاعها، مش على اليوزر المشترك. فلو حد دخل بـ PIN حد تاني، الشغل هيتحسب على صاحبة الـ PIN. كل واحدة ماتقولش الـ PIN لحد.</div>
+    <div class="notice ar"><b>٥. الفرع والقسم إجباري.</b> <span id="dq5"></span></div>
+    <div class="notice ar"><b>٦. قفل الحجوزات اللي ميعادها عدّى كل يوم.</b> <span id="dq6"></span></div>
+   </div>
+   <h3>Identity checks <small>who is who behind the shared logins</small></h3>
+   <div class="cards" id="idCards"></div>
+   <h3 style="font-size:24px">Working under another login</h3>
+   <div class="tw"><table id="tIdCross"></table></div>
+   <h3 style="font-size:24px">Opportunities whose “employee” field was overwritten</h3>
+   <div class="tw"><table id="tIdOvw"></table></div>
+   <h3 style="font-size:24px">HR records to fix</h3>
+   <div class="tw"><table id="tIdHR"></table></div>
+  </section>
+
+ </div>
+</main>
 </div>
+<div class="toast" id="toast" role="status"></div>
 
-<div class="rangeline" id="rangeline">Loading…</div>
+<!-- The dashboard's own script, lines 473-1191 of the original, unchanged.
 
-<div class="tabs-wrap"><div class="tabs"><button class="tab active" data-panel="pa"><span class="tab-num">00</span> Appointments</button>
-  <button class="tab" data-panel="ov"><span class="tab-num">01</span> Executive summary</button>
-  <button class="tab" data-panel="pc"><span class="tab-num">02</span> CRM</button>
-  <button class="tab" data-panel="pu"><span class="tab-num">03</span> Calls</button>
-  <button class="tab" data-panel="ag"><span class="tab-num">04</span> Agents</button>
-  <button class="tab" data-panel="tm"><span class="tab-num">05</span> Timing</button>
-  <button class="tab" data-panel="br"><span class="tab-num">06</span> Branches &amp; doctors</button>
-  <button class="tab" data-panel="dq"><span class="tab-num">07</span> Data quality</button></div></div>
+     It opens expecting `DATA`, `APPT` and `CRM` to already exist as globals,
+     so cc-shim.js runs FIRST and defines them from /api/cc/bootstrap before
+     loading this file. That ordering is the whole arrangement: the script is
+     never edited, it simply finds what it expects.
 
-<div class="panel active" id="pa"></div>
-<div class="panel" id="ov"></div>
-<div class="panel" id="pc"></div>
-<div class="panel" id="pu"></div>
-<div class="panel" id="ag"></div>
-<div class="panel" id="tm"></div>
-<div class="panel" id="br"></div>
-<div class="panel" id="dq"></div>
-
-<!-- The weekly lock (public/cc-gate.js). Empty unless the server answers 423. -->
-<div id="ccgate"></div>
-
-<!-- The shared $/fmt/pc/esc, loaded before anything that uses them. -->
-<script src="/assets/fmt.js"></script>
-<script src="/assets/shell.js"></script>
+     `nav.js` is the app's own, and injects the sidebar every report shares. -->
 <script src="/assets/nav.js"></script>
-<script src="/assets/cbar.js"></script>
-<script src="/assets/rules.js"></script>
-<script src="/assets/cc-fmt.js"></script>
-<script src="/assets/cc-appointments.js"></script>
-<script src="/assets/cc-summary.js"></script>
-<script src="/assets/cc-crm.js"></script>
-<script src="/assets/cc-calls.js"></script>
-<script src="/assets/cc-agents.js"></script>
-<script src="/assets/cc-timing.js"></script>
-<script src="/assets/cc-branches.js"></script>
-<script src="/assets/cc-quality.js"></script>
-<script src="/assets/cc-gate.js"></script>
-<script src="/assets/contact-centre.js"></script>
+<script src="/assets/cc-shim.js"></script>
 </body>
 </html>

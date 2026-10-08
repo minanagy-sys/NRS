@@ -245,10 +245,7 @@ module.exports = async function (app) {
         req.log.error(e);
         /* Which layer failed changes what to do about it — the same distinction the
            sales Refresh draws, so an Odoo outage is never read as a missing feature. */
-        const said = {
-          token: [401, 'Your sign-in has expired. Sign out, sign in again, then try once more.'],
-          odoo: [503, 'The MCP is up but Odoo is not answering it. Nothing was changed — try again shortly.'],
-        }[e.kind] || [502, 'Could not reach the MCP. The server log has the detail.'];
+        const said = require('../lib/sync.js').explainSyncError(e, { again: 'try once more' });
         return reply.code(said[0]).send({ error: said[1] });
       }
     });

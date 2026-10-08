@@ -130,10 +130,7 @@ module.exports = async function (app) {
          saying "could not reach the MCP" during an Odoo outage sends them
          hunting through this app for a fault that is not here. The kind is
          safe to state; the detail still goes only to the log. */
-      const said = {
-        token: [401, 'Your sign-in has expired. Sign out, sign in again, then Refresh.'],
-        odoo: [503, 'The MCP is up but Odoo is not answering it. Nothing is wrong with this app or with the figures already shown — they are the last good pull. Try Refresh again shortly.'],
-      }[e.kind] || [502, 'Could not reach the MCP. The server log has the detail.'];
+      const said = Sync.explainSyncError(e, { again: 'Sync now' });
       return reply.code(said[0]).send({ error: said[1] });
     }
   });

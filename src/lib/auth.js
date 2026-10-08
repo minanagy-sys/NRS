@@ -141,7 +141,20 @@ async function currentSession(sessionId) {
   if (Date.now() - s.lastSeenAt.getTime() > 60_000) {
     await prisma.session.update({ where: { id: s.id }, data: { lastSeenAt: new Date() } }).catch(() => {});
   }
-  return { id: s.id, subject: s.subject, displayName: s.displayName, canWrite: s.canWrite, token: decrypt(s.tokenCipher) };
+  /* A token this process cannot decrypt is a SIGNED-OUT user, not a server
+     fault. It happens whenever TOKEN_KEY changes — which `.env.example` says
+     signs everyone out — and whenever two checkouts of this app share one
+     database with different keys, which is easier to do than it sounds.
+     Throwing here turned that into a 500 on every page: AES-GCM fails the auth
+     tag and Node reports "Unsupported state or unable to authenticate data",
+     which reads like a crash rather than "sign in again". */
+  let token;
+  try {
+    token = decrypt(s.tokenCipher);
+  } catch {
+    return null;
+  }
+  return { id: s.id, subject: s.subject, displayName: s.displayName, canWrite: s.canWrite, token };
 }
 
 const signOut = (sessionId) =>

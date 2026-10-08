@@ -213,8 +213,16 @@ cd /opt/nrs 2>/dev/null && {
   # scheme importer, two migrations. Confirmed equal to the Mac's own tree,
   # computed the same way:
   #   find src public scripts prisma -type f | sort | ... | md5
-  EXPECT_FILES=134
-  EXPECT_SUM=6f9c89cf0fe35410806ca6ecbd130793
+  # Re-stamped 2026-10-04, for the deploy that brought Contact Centre v2 (eight
+  # panels, the weekly UCM lock, the CDR importer), Targets & Plan, Commission
+  # v3.2 and the shared public/fmt.js. 43 files more than the 2026-09-23 stamp,
+  # nothing left over from older builds. Equal to the Mac's tree, both computed
+  # exactly as below.
+  # Re-stamped 2026-10-08: NRS-Updated.zip — the package-cash sync (PackageDay),
+  # the branch-name resolver, and the dashboard's refunds now subtracted in its
+  # own queries rather than by storing invoices signed.
+  EXPECT_FILES=207
+  EXPECT_SUM=e1400496ba756dd377cfb9e01bb75931
   [[ "$cnt" == "$EXPECT_FILES" && "$sum" == "$EXPECT_SUM" ]] \
     && p "$EXPECT_FILES files, checksum matches the Mac exactly" \
     || f "tree is $cnt files / $sum — expected $EXPECT_FILES / $EXPECT_SUM (re-stamp after every intended deploy)"
